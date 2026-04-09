@@ -545,6 +545,171 @@ function ConfigScreen({onSave,onSkip}){
 /* ═══════════════════════════════════════════════════════════════════════════
    MAIN APP
 ═══════════════════════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════════════════════
+   TOP-LEVEL MODAL COMPONENTS
+   Defined outside WattsHub so they never remount on parent re-renders.
+   All state passed as props — no closure over parent state.
+═══════════════════════════════════════════════════════════════════════════ */
+
+function GoalModal({kid,editGoal,setEditGoal,onClose,onSave,centsShort,xpToCents}){
+  if(!kid)return null;
+  const eg=editGoal;
+  return <div className="mbd" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
+    <div className="mt">Goals — {kid.name}</div>
+    <div style={{background:"var(--s2)",borderRadius:"var(--rs)",padding:"10px 13px",marginBottom:16,fontSize:12,color:"var(--pul)"}}>
+      10 XP = $1.00 · Streak multiplier applies to earnings
+    </div>
+    <div style={{fontSize:12,fontWeight:800,color:"var(--tx2)",textTransform:"uppercase",letterSpacing:".06em",marginBottom:10}}>Weekly goal</div>
+    <div className="f2">
+      <div className="fg"><label className="fl">XP target / week</label><input className="fi" type="number" value={eg.weeklyXpTarget} onChange={e=>setEditGoal(g=>({...g,weeklyXpTarget:+e.target.value||0}))}/></div>
+      <div className="fg"><label className="fl">Bonus on completion ($)</label><input className="fi" type="number" step=".25" value={(eg.weeklyBonusCents/100).toFixed(2)} onChange={e=>setEditGoal(g=>({...g,weeklyBonusCents:Math.round(+e.target.value*100)||0}))}/></div>
+    </div>
+    <div style={{fontSize:12,fontWeight:800,color:"var(--tx2)",textTransform:"uppercase",letterSpacing:".06em",marginBottom:10,marginTop:4}}>Monthly goal</div>
+    <div className="f2">
+      <div className="fg"><label className="fl">XP target / month</label><input className="fi" type="number" value={eg.monthlyXpTarget} onChange={e=>setEditGoal(g=>({...g,monthlyXpTarget:+e.target.value||0}))}/></div>
+      <div className="fg"><label className="fl">Bonus on completion ($)</label><input className="fi" type="number" step=".25" value={(eg.monthlyBonusCents/100).toFixed(2)} onChange={e=>setEditGoal(g=>({...g,monthlyBonusCents:Math.round(+e.target.value*100)||0}))}/></div>
+    </div>
+    <div className="fg"><label className="fl">Overage rate (XP above monthly goal)</label>
+      <select className="fi" value={eg.overageRate} onChange={e=>setEditGoal(g=>({...g,overageRate:+e.target.value}))}>
+        <option value={5}>$0.50 per extra XP (half rate)</option>
+        <option value={10}>$1.00 per extra XP (standard)</option>
+        <option value={15}>$1.50 per extra XP (bonus rate)</option>
+        <option value={20}>$2.00 per extra XP (double rate)</option>
+      </select>
+      <div className="fhint">XP earned above the monthly target earns this rate on top of the base bonus.</div>
+    </div>
+    <div className="preview-box"><div className="preview-box-t">Preview</div><div className="preview-row">
+      <div>📅 Hit <strong style={{color:"var(--bl)"}}>{eg.weeklyXpTarget} XP/week</strong> → <strong style={{color:"var(--bl)"}}>${(eg.weeklyBonusCents/100).toFixed(2)} bonus</strong></div>
+      <div>🏆 Hit <strong style={{color:"var(--am)"}}>{eg.monthlyXpTarget} XP/month</strong> → <strong style={{color:"var(--am)"}}>${(eg.monthlyBonusCents/100).toFixed(2)} bonus</strong></div>
+      <div>⚡ Each XP above monthly goal → <strong style={{color:"var(--te)"}}>${(eg.overageRate/100).toFixed(2)} extra</strong></div>
+    </div></div>
+    <div className="fax"><button className="btn btn-g" onClick={onClose}>Cancel</button><button className="btn btn-p" onClick={onSave}>Save goals</button></div>
+  </div></div>;
+}
+
+function AddChoreModal({cf,setCf,kids,onClose,onSave,toggleDay}){
+  const isFixed=cf.freq==="daily"&&cf.scheduleType==="fixed";
+  const xp=DIFF[cf.diff]?.xp||0;
+  return <div className="mbd" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
+    <div className="mt">Add chore</div>
+    <div className="fg"><label className="fl">Title</label>
+      <input className="fi" placeholder="e.g. Clean the bathroom" autoFocus
+        value={cf.title} onChange={e=>setCf(f=>({...f,title:e.target.value}))}/>
+    </div>
+    <div className="f2">
+      <div className="fg"><label className="fl">Difficulty</label><select className="fi" value={cf.diff} onChange={e=>setCf(f=>({...f,diff:e.target.value}))}>
+        {Object.entries(DIFF).map(([k,v])=><option key={k} value={k}>{v.lbl} — {v.xp} XP / {centsShort(xpToCents(v.xp))}</option>)}</select></div>
+      <div className="fg"><label className="fl">Frequency</label><select className="fi" value={cf.freq} onChange={e=>setCf(f=>({...f,freq:e.target.value,scheduleType:"daily",scheduleDays:[]}))}>
+        <option value="daily">Daily / Scheduled</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="once">One-time</option></select></div>
+    </div>
+    {cf.freq==="daily"&&<div className="fg"><label className="fl">Schedule</label>
+      <div className="smode">
+        <button className={`smode-btn${cf.scheduleType==="daily"?" on":""}`} onClick={()=>setCf(f=>({...f,scheduleType:"daily",scheduleDays:[]}))}>Every day</button>
+        <button className={`smode-btn${cf.scheduleType==="fixed"?" on":""}`} onClick={()=>setCf(f=>({...f,scheduleType:"fixed"}))}>Specific days</button>
+      </div>
+      {cf.scheduleType==="fixed"&&<><div className="daypicker">{DAY_NAMES.map((name,dow)=><div key={dow} className={`daychip${cf.scheduleDays.includes(dow)?" on":""}`} onClick={()=>toggleDay(dow)}>{name.slice(0,1)}</div>)}</div>
+        {cf.scheduleDays.length>0&&<div className="fhint" style={{marginTop:6}}>{cf.scheduleDays.map(d=>DAY_NAMES[d]).join(", ")}</div>}
+        {!cf.scheduleDays.length&&<div className="fhint" style={{color:"var(--co)",marginTop:6}}>Select at least one day.</div>}
+      </>}
+    </div>}
+    <div className="fg"><label className="fl">Assign to</label><div className="agrid">{kids.map(k=>{const cc=COLORS[k.colorIdx];const sel=cf.assignedTo.includes(k.id);
+      return <div key={k.id} className={`achip${sel?" sel":""}`} onClick={()=>setCf(f=>({...f,assignedTo:sel?f.assignedTo.filter(x=>x!==k.id):[...f.assignedTo,k.id]}))}>
+        <span className="adot" style={{background:cc.bg}}/>{k.name}</div>;})}
+    </div></div>
+    <div className="fg"><div className="swrow"><label className="fl" style={{marginBottom:0}}>Requires approval</label>
+      <label className="sw"><input type="checkbox" checked={cf.requiresApproval} onChange={e=>setCf(f=>({...f,requiresApproval:e.target.checked}))}/><div className="sw-tr"/><div className="sw-th"/></label></div></div>
+    {xp>0&&<div className="fhint" style={{marginBottom:0}}>Earns: {xp} XP & {centsShort(xpToCents(xp))} per completion</div>}
+    <div className="fax"><button className="btn btn-g" onClick={onClose}>Cancel</button>
+      <button className="btn btn-p" disabled={!cf.title.trim()||!cf.assignedTo.length||(isFixed&&!cf.scheduleDays.length)} onClick={onSave}>Add chore</button></div>
+  </div></div>;
+}
+
+function AddKidModal({kf,setKf,onClose,onSave}){
+  return <div className="mbd" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
+    <div className="mt">Add family member</div>
+    <div className="fg"><label className="fl">Name</label>
+      <input className="fi" placeholder="Jordan" autoFocus value={kf.name} onChange={e=>setKf(f=>({...f,name:e.target.value}))}/>
+    </div>
+    <div className="f2">
+      <div className="fg"><label className="fl">Age</label><input className="fi" type="number" placeholder="14" value={kf.age} onChange={e=>setKf(f=>({...f,age:e.target.value}))}/></div>
+      <div className="fg"><label className="fl">Initials</label><input className="fi" placeholder="JW" maxLength={2} value={kf.initials} onChange={e=>setKf(f=>({...f,initials:e.target.value.toUpperCase()}))}/></div>
+    </div>
+    <div className="fax"><button className="btn btn-g" onClick={onClose}>Cancel</button><button className="btn btn-p" onClick={onSave}>Add</button></div>
+  </div></div>;
+}
+
+function AddItemModal({itemF,setItemF,onClose,onSave}){
+  return <div className="mbd" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
+    <div className="mt">Add store item</div>
+    <div className="f2">
+      <div className="fg"><label className="fl">Emoji</label><input className="fi" value={itemF.emoji} onChange={e=>setItemF(f=>({...f,emoji:e.target.value}))}/></div>
+      <div className="fg"><label className="fl">Price ($)</label><input className="fi" type="number" step=".25" value={(itemF.priceCents/100).toFixed(2)} onChange={e=>setItemF(f=>({...f,priceCents:Math.round(+e.target.value*100)||0}))}/></div>
+    </div>
+    <div className="fg"><label className="fl">Name</label>
+      <input className="fi" placeholder="Movie night pick" autoFocus value={itemF.name} onChange={e=>setItemF(f=>({...f,name:e.target.value}))}/>
+    </div>
+    <div className="fg"><label className="fl">Description</label><input className="fi" placeholder="Short description" value={itemF.desc} onChange={e=>setItemF(f=>({...f,desc:e.target.value}))}/></div>
+    <div className="fax"><button className="btn btn-g" onClick={onClose}>Cancel</button><button className="btn btn-p" disabled={!itemF.name.trim()} onClick={onSave}>Add item</button></div>
+  </div></div>;
+}
+
+function EditChoreModal({editChore,setEditChore,kids,onSave,onDelete}){
+  if(!editChore)return null;
+  const ec=editChore;
+  const setEc=fn=>setEditChore(prev=>({...prev,...fn(prev)}));
+  const isFixed=ec.freq==="daily"&&ec.scheduleType==="fixed";
+  return <div className="mbd" onClick={()=>setEditChore(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
+    <div className="mt">Edit chore</div>
+    <div className="fg"><label className="fl">Title</label>
+      <input className="fi" autoFocus value={ec.title} onChange={e=>setEc(p=>({...p,title:e.target.value}))}/>
+    </div>
+    <div className="f2">
+      <div className="fg"><label className="fl">Difficulty</label><select className="fi" value={ec.diff} onChange={e=>setEc(p=>({...p,diff:e.target.value}))}>
+        {Object.entries(DIFF).map(([k,v])=><option key={k} value={k}>{v.lbl} — {v.xp} XP / {centsShort(xpToCents(v.xp))}</option>)}</select></div>
+      <div className="fg"><label className="fl">Frequency</label><select className="fi" value={ec.freq} onChange={e=>setEc(p=>({...p,freq:e.target.value,scheduleType:"daily",scheduleDays:[]}))}>
+        <option value="daily">Daily / Scheduled</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="once">One-time</option></select></div>
+    </div>
+    {ec.freq==="daily"&&<div className="fg"><label className="fl">Schedule</label>
+      <div className="smode">
+        <button className={`smode-btn${ec.scheduleType==="daily"?" on":""}`} onClick={()=>setEc(p=>({...p,scheduleType:"daily",scheduleDays:[]}))}>Every day</button>
+        <button className={`smode-btn${ec.scheduleType==="fixed"?" on":""}`} onClick={()=>setEc(p=>({...p,scheduleType:"fixed"}))}>Specific days</button>
+      </div>
+      {ec.scheduleType==="fixed"&&<div className="daypicker">{DAY_NAMES.map((name,dow)=>{
+        const on=ec.scheduleDays.includes(dow);
+        return <div key={dow} className={`daychip${on?" on":""}`} onClick={()=>setEc(p=>({...p,scheduleDays:on?p.scheduleDays.filter(d=>d!==dow):[...p.scheduleDays,dow].sort((a,b)=>a-b)}))}>
+          {name.slice(0,1)}</div>;
+      })}</div>}
+    </div>}
+    <div className="fg"><label className="fl">Assign to</label><div className="agrid">{kids.map(k=>{const cc=COLORS[k.colorIdx];const sel=ec.assignedTo.includes(k.id);
+      return <div key={k.id} className={`achip${sel?" sel":""}`} onClick={()=>setEc(p=>({...p,assignedTo:sel?p.assignedTo.filter(x=>x!==k.id):[...p.assignedTo,k.id]}))}>
+        <span className="adot" style={{background:cc.bg}}/>{k.name}</div>;})}
+    </div></div>
+    <div className="fg"><div className="swrow"><label className="fl" style={{marginBottom:0}}>Requires approval</label>
+      <label className="sw"><input type="checkbox" checked={ec.requiresApproval} onChange={e=>setEc(p=>({...p,requiresApproval:e.target.checked}))}/><div className="sw-tr"/><div className="sw-th"/></label></div></div>
+    <div className="fax">
+      <button className="btn btn-no btn-sm" onClick={onDelete}>Delete</button>
+      <div style={{flex:1}}/>
+      <button className="btn btn-g" onClick={()=>setEditChore(null)}>Cancel</button>
+      <button className="btn btn-p" disabled={!ec.title.trim()||!ec.assignedTo.length||(isFixed&&!ec.scheduleDays.length)} onClick={onSave}>Save</button>
+    </div>
+  </div></div>;
+}
+
+function EditKidModal({editKid,setEditKid,onSave}){
+  if(!editKid)return null;
+  return <div className="mbd" onClick={()=>setEditKid(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
+    <div className="mt">Edit profile</div>
+    <div className="fg"><label className="fl">Name</label>
+      <input className="fi" autoFocus value={editKid.name} onChange={e=>setEditKid(p=>({...p,name:e.target.value}))}/>
+    </div>
+    <div className="f2">
+      <div className="fg"><label className="fl">Age</label><input className="fi" type="number" value={editKid.age} onChange={e=>setEditKid(p=>({...p,age:parseInt(e.target.value)||p.age}))}/></div>
+      <div className="fg"><label className="fl">Initials</label><input className="fi" maxLength={2} value={editKid.initials} onChange={e=>setEditKid(p=>({...p,initials:e.target.value.toUpperCase()}))}/></div>
+    </div>
+    <div className="fax"><button className="btn btn-g" onClick={()=>setEditKid(null)}>Cancel</button><button className="btn btn-p" onClick={onSave}>Save</button></div>
+  </div></div>;
+}
+
 export default function WattsHub(){
   const[showCfg,setShowCfg]=useState(false);
   const{ready,write,merge,listen,del}=useFB();
@@ -1424,213 +1589,8 @@ export default function WattsHub(){
   }
 
   /* ── Modals ── */
-  function GoalModal(){
-    const kid=kidById(goalKid); if(!kid)return null;
-    const eg=editGoal;
-    return <div className="mbd" onClick={()=>setGoalKid(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
-      <div className="mt">Goals — {kid.name}</div>
-      <div style={{background:"var(--s2)",borderRadius:"var(--rs)",padding:"10px 13px",marginBottom:16,fontSize:12,color:"var(--pul)"}}>
-        10 XP = $1.00 · Streak multiplier applies to earnings
-      </div>
-      <div style={{fontSize:12,fontWeight:800,color:"var(--tx2)",textTransform:"uppercase",letterSpacing:".06em",marginBottom:10}}>Weekly goal</div>
-      <div className="f2">
-        <div className="fg"><label className="fl">XP target / week</label><input className="fi" type="number" value={eg.weeklyXpTarget} onChange={e=>setEditGoal(g=>({...g,weeklyXpTarget:+e.target.value||0}))}/></div>
-        <div className="fg"><label className="fl">Bonus on completion ($)</label><input className="fi" type="number" step=".25" value={(eg.weeklyBonusCents/100).toFixed(2)} onChange={e=>setEditGoal(g=>({...g,weeklyBonusCents:Math.round(+e.target.value*100)||0}))}/></div>
-      </div>
-      <div style={{fontSize:12,fontWeight:800,color:"var(--tx2)",textTransform:"uppercase",letterSpacing:".06em",marginBottom:10,marginTop:4}}>Monthly goal</div>
-      <div className="f2">
-        <div className="fg"><label className="fl">XP target / month</label><input className="fi" type="number" value={eg.monthlyXpTarget} onChange={e=>setEditGoal(g=>({...g,monthlyXpTarget:+e.target.value||0}))}/></div>
-        <div className="fg"><label className="fl">Bonus on completion ($)</label><input className="fi" type="number" step=".25" value={(eg.monthlyBonusCents/100).toFixed(2)} onChange={e=>setEditGoal(g=>({...g,monthlyBonusCents:Math.round(+e.target.value*100)||0}))}/></div>
-      </div>
-      <div className="fg"><label className="fl">Overage rate (XP above monthly goal)</label>
-        <select className="fi" value={eg.overageRate} onChange={e=>setEditGoal(g=>({...g,overageRate:+e.target.value}))}>
-          <option value={5}>$0.50 per extra XP (half rate)</option>
-          <option value={10}>$1.00 per extra XP (standard)</option>
-          <option value={15}>$1.50 per extra XP (bonus rate)</option>
-          <option value={20}>$2.00 per extra XP (double rate)</option>
-        </select>
-        <div className="fhint">XP earned above the monthly target earns this rate on top of the base bonus.</div>
-      </div>
-      <div className="preview-box"><div className="preview-box-t">Preview</div><div className="preview-row">
-        <div>📅 Hit <strong style={{color:"var(--bl)"}}>{eg.weeklyXpTarget} XP/week</strong> → <strong style={{color:"var(--bl)"}}>${(eg.weeklyBonusCents/100).toFixed(2)} bonus</strong></div>
-        <div>🏆 Hit <strong style={{color:"var(--am)"}}>{eg.monthlyXpTarget} XP/month</strong> → <strong style={{color:"var(--am)"}}>${(eg.monthlyBonusCents/100).toFixed(2)} bonus</strong></div>
-        <div>⚡ Each XP above monthly goal → <strong style={{color:"var(--te)"}}>${(eg.overageRate/100).toFixed(2)} extra</strong></div>
-      </div></div>
-      <div className="fax"><button className="btn btn-g" onClick={()=>setGoalKid(null)}>Cancel</button><button className="btn btn-p" onClick={()=>saveGoal(goalKid)}>Save goals</button></div>
-    </div></div>;
-  }
+  // Modals rendered via top-level components — see below WattsHub
 
-  function AddChoreModal(){
-    const isFixed=cf.freq==="daily"&&cf.scheduleType==="fixed";
-    const xp=DIFF[cf.diff]?.xp||0;
-    return <div className="mbd" onClick={()=>setShowAddChore(false)}><div className="modal" onClick={e=>e.stopPropagation()}>
-      <div className="mt">Add chore</div>
-      <div className="fg"><label className="fl">Title</label><input className="fi" placeholder="e.g. Clean the bathroom" value={cf.title} onChange={e=>setCf(f=>({...f,title:e.target.value}))}/></div>
-      <div className="f2">
-        <div className="fg"><label className="fl">Difficulty</label><select className="fi" value={cf.diff} onChange={e=>setCf(f=>({...f,diff:e.target.value}))}>
-          {Object.entries(DIFF).map(([k,v])=><option key={k} value={k}>{v.lbl} — {v.xp} XP / {centsShort(xpToCents(v.xp))}</option>)}</select></div>
-        <div className="fg"><label className="fl">Frequency</label><select className="fi" value={cf.freq} onChange={e=>setCf(f=>({...f,freq:e.target.value,scheduleType:"daily",scheduleDays:[]}))}>
-          <option value="daily">Daily / Scheduled</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="once">One-time</option></select></div>
-      </div>
-      {cf.freq==="daily"&&<div className="fg"><label className="fl">Schedule</label>
-        <div className="smode">
-          <button className={`smode-btn${cf.scheduleType==="daily"?" on":""}`} onClick={()=>setCf(f=>({...f,scheduleType:"daily",scheduleDays:[]}))}>Every day</button>
-          <button className={`smode-btn${cf.scheduleType==="fixed"?" on":""}`} onClick={()=>setCf(f=>({...f,scheduleType:"fixed"}))}>Specific days</button>
-        </div>
-        {cf.scheduleType==="fixed"&&<><div className="daypicker">{DAY_NAMES.map((name,dow)=><div key={dow} className={`daychip${cf.scheduleDays.includes(dow)?" on":""}`} onClick={()=>toggleDay(dow)}>{name.slice(0,1)}</div>)}</div>
-          {cf.scheduleDays.length>0&&<div className="fhint" style={{marginTop:6}}>{cf.scheduleDays.map(d=>DAY_NAMES[d]).join(", ")}</div>}
-          {!cf.scheduleDays.length&&<div className="fhint" style={{color:"var(--co)",marginTop:6}}>Select at least one day.</div>}
-        </>}
-      </div>}
-      <div className="fg"><label className="fl">Assign to</label><div className="agrid">{kids.map(k=>{const cc=COLORS[k.colorIdx];const sel=cf.assignedTo.includes(k.id);
-        return <div key={k.id} className={`achip${sel?" sel":""}`} onClick={()=>setCf(f=>({...f,assignedTo:sel?f.assignedTo.filter(x=>x!==k.id):[...f.assignedTo,k.id]}))}>
-          <span className="adot" style={{background:cc.bg}}/>{k.name}</div>;})}
-      </div></div>
-      <div className="fg"><div className="swrow"><label className="fl" style={{marginBottom:0}}>Requires approval</label>
-        <label className="sw"><input type="checkbox" checked={cf.requiresApproval} onChange={e=>setCf(f=>({...f,requiresApproval:e.target.checked}))}/><div className="sw-tr"/><div className="sw-th"/></label></div></div>
-      {xp>0&&<div className="fhint" style={{marginBottom:0}}>Earns: {xp} XP & {centsShort(xpToCents(xp))} per completion</div>}
-      <div className="fax"><button className="btn btn-g" onClick={()=>setShowAddChore(false)}>Cancel</button>
-        <button className="btn btn-p" disabled={!cf.title.trim()||!cf.assignedTo.length||(isFixed&&!cf.scheduleDays.length)} onClick={addChore}>Add chore</button></div>
-    </div></div>;
-  }
-
-  function AddKidModal(){
-    return <div className="mbd" onClick={()=>setShowAddKid(false)}><div className="modal" onClick={e=>e.stopPropagation()}>
-      <div className="mt">Add family member</div>
-      <div className="fg"><label className="fl">Name</label><input className="fi" placeholder="Jordan" value={kf.name} onChange={e=>setKf(f=>({...f,name:e.target.value}))}/></div>
-      <div className="f2">
-        <div className="fg"><label className="fl">Age</label><input className="fi" type="number" placeholder="14" value={kf.age} onChange={e=>setKf(f=>({...f,age:e.target.value}))}/></div>
-        <div className="fg"><label className="fl">Initials</label><input className="fi" placeholder="JW" maxLength={2} value={kf.initials} onChange={e=>setKf(f=>({...f,initials:e.target.value.toUpperCase()}))}/></div>
-      </div>
-      <div className="fax"><button className="btn btn-g" onClick={()=>setShowAddKid(false)}>Cancel</button><button className="btn btn-p" onClick={addKid}>Add</button></div>
-    </div></div>;
-  }
-
-  function AddItemModal(){
-    return <div className="mbd" onClick={()=>setShowAddItem(false)}><div className="modal" onClick={e=>e.stopPropagation()}>
-      <div className="mt">Add store item</div>
-      <div className="f2">
-        <div className="fg"><label className="fl">Emoji</label><input className="fi" value={itemF.emoji} onChange={e=>setItemF(f=>({...f,emoji:e.target.value}))}/></div>
-        <div className="fg"><label className="fl">Price ($)</label><input className="fi" type="number" step=".25" value={(itemF.priceCents/100).toFixed(2)} onChange={e=>setItemF(f=>({...f,priceCents:Math.round(+e.target.value*100)||0}))}/></div>
-      </div>
-      <div className="fg"><label className="fl">Name</label><input className="fi" placeholder="Movie night pick" value={itemF.name} onChange={e=>setItemF(f=>({...f,name:e.target.value}))}/></div>
-      <div className="fg"><label className="fl">Description</label><input className="fi" placeholder="Short description" value={itemF.desc} onChange={e=>setItemF(f=>({...f,desc:e.target.value}))}/></div>
-      <div className="fax"><button className="btn btn-g" onClick={()=>setShowAddItem(false)}>Cancel</button><button className="btn btn-p" disabled={!itemF.name.trim()} onClick={addStoreItem}>Add item</button></div>
-    </div></div>;
-  }
-
-  /* ─── Profile picker screen ── */
-  function ProfilePicker(){
-    return(
-      <div className="picker-wrap">
-        <div className="picker-logo">Watts<span>Hub</span></div>
-        <div className="picker-sub">Who's using the app?</div>
-        <div className="picker-grid">
-          {kids.map(k=>{
-            const c=COLORS[k.colorIdx];
-            return(
-              <div key={k.id} className="picker-card" onClick={()=>enterKidMode(k.id)}>
-                <div style={{width:64,height:64,borderRadius:"50%",background:c.bg,color:c.tx,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,fontWeight:900}}>{k.initials}</div>
-                <div className="picker-name">{k.name}</div>
-                <div className="picker-sub2">Age {k.age}</div>
-              </div>
-            );
-          })}
-          <div className="picker-card parent" onClick={enterParentMode}>
-            <div style={{width:64,height:64,borderRadius:"50%",background:"rgba(124,111,247,.2)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:28}}>🔑</div>
-            <div className="picker-name">Parent</div>
-            <div className="picker-sub2">{isPINSet()?"PIN required":"Tap to enter"}</div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  /* ─── PIN screen ── */
-  function PINScreen(){
-    const dots=[0,1,2,3];
-    const label=pinMode==='set'
-      ?pinStep===1?'Set a parent PIN':'Confirm your PIN'
-      :'Enter parent PIN';
-    const sublabel=pinMode==='set'
-      ?pinStep===1?'Choose a 4-digit PIN you will remember':'Enter the same PIN again'
-      :'Required to access parent controls';
-    return(
-      <div className="pin-wrap">
-        <div className="pin-box">
-          <div className="pin-title">{label}</div>
-          <div className="pin-sub">{sublabel}</div>
-          <div className="pin-dots">
-            {dots.map(i=><div key={i} className={`pin-dot${i<pinEntry.length?" filled":""}${pinError?" error":""}`}/>)}
-          </div>
-          <div className="pin-pad">
-            {['1','2','3','4','5','6','7','8','9','','0','del'].map((k,i)=>
-              k===''?<div key={i}/>:
-              <button key={i} className={`pin-key${k==='del'?" del":""}`} onClick={()=>handlePINKey(k)}>
-                {k==='del'?'⌫':k}
-              </button>
-            )}
-          </div>
-          <button className="btn btn-g" style={{width:"100%"}} onClick={()=>{setPinEntry('');setScreen('picker');}}>← Back</button>
-        </div>
-      </div>
-    );
-  }
-
-  /* ─── Edit chore modal ── */
-  function EditChoreModal(){
-    if(!editChore)return null;
-    const ec=editChore;
-    const setEc=fn=>setEditChore(prev=>({...prev,...fn(prev)}));
-    const isFixed=ec.freq==="daily"&&ec.scheduleType==="fixed";
-    return <div className="mbd" onClick={()=>setEditChore(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
-      <div className="mt">Edit chore</div>
-      <div className="fg"><label className="fl">Title</label><input className="fi" value={ec.title} onChange={e=>setEc(p=>({...p,title:e.target.value}))}/></div>
-      <div className="f2">
-        <div className="fg"><label className="fl">Difficulty</label><select className="fi" value={ec.diff} onChange={e=>setEc(p=>({...p,diff:e.target.value}))}>
-          {Object.entries(DIFF).map(([k,v])=><option key={k} value={k}>{v.lbl} — {v.xp} XP / {centsShort(xpToCents(v.xp))}</option>)}</select></div>
-        <div className="fg"><label className="fl">Frequency</label><select className="fi" value={ec.freq} onChange={e=>setEc(p=>({...p,freq:e.target.value,scheduleType:"daily",scheduleDays:[]}))}>
-          <option value="daily">Daily / Scheduled</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="once">One-time</option></select></div>
-      </div>
-      {ec.freq==="daily"&&<div className="fg"><label className="fl">Schedule</label>
-        <div className="smode">
-          <button className={`smode-btn${ec.scheduleType==="daily"?" on":""}`} onClick={()=>setEc(p=>({...p,scheduleType:"daily",scheduleDays:[]}))}>Every day</button>
-          <button className={`smode-btn${ec.scheduleType==="fixed"?" on":""}`} onClick={()=>setEc(p=>({...p,scheduleType:"fixed"}))}>Specific days</button>
-        </div>
-        {ec.scheduleType==="fixed"&&<div className="daypicker">{DAY_NAMES.map((name,dow)=>{
-          const on=ec.scheduleDays.includes(dow);
-          return <div key={dow} className={`daychip${on?" on":""}`} onClick={()=>setEc(p=>({...p,scheduleDays:on?p.scheduleDays.filter(d=>d!==dow):[...p.scheduleDays,dow].sort((a,b)=>a-b)}))}>
-            {name.slice(0,1)}</div>;
-        })}</div>}
-      </div>}
-      <div className="fg"><label className="fl">Assign to</label><div className="agrid">{kids.map(k=>{const cc=COLORS[k.colorIdx];const sel=ec.assignedTo.includes(k.id);
-        return <div key={k.id} className={`achip${sel?" sel":""}`} onClick={()=>setEc(p=>({...p,assignedTo:sel?p.assignedTo.filter(x=>x!==k.id):[...p.assignedTo,k.id]}))}>
-          <span className="adot" style={{background:cc.bg}}/>{k.name}</div>;})}
-      </div></div>
-      <div className="fg"><div className="swrow"><label className="fl" style={{marginBottom:0}}>Requires approval</label>
-        <label className="sw"><input type="checkbox" checked={ec.requiresApproval} onChange={e=>setEc(p=>({...p,requiresApproval:e.target.checked}))}/><div className="sw-tr"/><div className="sw-th"/></label></div></div>
-      <div className="fax">
-        <button className="btn btn-no btn-sm" onClick={()=>deleteChore(ec.id)}>Delete</button>
-        <div style={{flex:1}}/>
-        <button className="btn btn-g" onClick={()=>setEditChore(null)}>Cancel</button>
-        <button className="btn btn-p" disabled={!ec.title.trim()||!ec.assignedTo.length||(isFixed&&!ec.scheduleDays.length)} onClick={saveEditChore}>Save</button>
-      </div>
-    </div></div>;
-  }
-
-  /* ─── Edit kid modal ── */
-  function EditKidModal(){
-    if(!editKid)return null;
-    return <div className="mbd" onClick={()=>setEditKid(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
-      <div className="mt">Edit profile</div>
-      <div className="fg"><label className="fl">Name</label><input className="fi" value={editKid.name} onChange={e=>setEditKid(p=>({...p,name:e.target.value}))}/></div>
-      <div className="f2">
-        <div className="fg"><label className="fl">Age</label><input className="fi" type="number" value={editKid.age} onChange={e=>setEditKid(p=>({...p,age:parseInt(e.target.value)||p.age}))}/></div>
-        <div className="fg"><label className="fl">Initials</label><input className="fi" maxLength={2} value={editKid.initials} onChange={e=>setEditKid(p=>({...p,initials:e.target.value.toUpperCase()}))}/></div>
-      </div>
-      <div className="fax"><button className="btn btn-g" onClick={()=>setEditKid(null)}>Cancel</button><button className="btn btn-p" onClick={saveEditKid}>Save</button></div>
-    </div></div>;
-  }
 
   /* ─── Bottom nav (mobile only) ── */
   function BottomNav(){
@@ -1668,7 +1628,7 @@ export default function WattsHub(){
         <div className="twrap">{toasts.map(t=><div className="toast" key={t.id}>{t.xp&&<span className="t-xp">+{t.xp} XP</span>}{t.cents&&<span className="t-do">{centsShort(t.cents)}</span>}<span className="t-msg">{t.msg}</span></div>)}</div>
         {lvlUp&&<div className="lvlbd"><div className="lvlbox"><h2>Level Up! ⚡</h2><p>{lvlUp.name} reached Level {lvlUp.level}!</p></div></div>}
         {buyBanner&&<div className="buy-banner"><div style={{fontSize:28}}>{buyBanner.emoji}</div><div><div style={{fontSize:14,fontWeight:800}}>{buyBanner.name}</div><div style={{fontSize:11,color:"var(--tx2)",marginTop:2}}>Redeemed for {buyBanner.price} 🎉</div></div></div>}
-        {goalKid&&<GoalModal/>}
+        {goalKid&&<GoalModal kid={kidById(goalKid)} editGoal={editGoal} setEditGoal={setEditGoal} onClose={()=>setGoalKid(null)} onSave={()=>saveGoal(goalKid)} centsShort={centsShort} xpToCents={xpToCents}/>}
         <KidMode/>
         <button onClick={()=>setScreen('picker')} style={{position:"fixed",bottom:20,right:20,background:"var(--s2)",border:"1px solid var(--b2)",borderRadius:"var(--rs)",padding:"8px 14px",fontSize:12,fontWeight:700,color:"var(--tx2)",cursor:"pointer",fontFamily:"var(--f)"}}>← Switch profile</button>
       </>
@@ -1690,12 +1650,12 @@ export default function WattsHub(){
       <div className="twrap">{toasts.map(t=><div className="toast" key={t.id}>{t.xp&&<span className="t-xp">+{t.xp} XP</span>}{t.cents&&<span className="t-do">{centsShort(t.cents)}</span>}<span className="t-msg">{t.msg}</span></div>)}</div>
       {lvlUp&&<div className="lvlbd"><div className="lvlbox"><h2>Level Up! ⚡</h2><p>{lvlUp.name} reached Level {lvlUp.level}!</p></div></div>}
       {buyBanner&&<div className="buy-banner"><div style={{fontSize:28}}>{buyBanner.emoji}</div><div><div style={{fontSize:14,fontWeight:800}}>{buyBanner.name}</div><div style={{fontSize:11,color:"var(--tx2)",marginTop:2}}>Redeemed for {buyBanner.price} 🎉</div></div></div>}
-      {goalKid&&<GoalModal/>}
-      {showAddChore&&<AddChoreModal/>}
-      {showAddKid&&<AddKidModal/>}
-      {showAddItem&&<AddItemModal/>}
-      {editChore&&<EditChoreModal/>}
-      {editKid&&<EditKidModal/>}
+      {goalKid&&<GoalModal kid={kidById(goalKid)} editGoal={editGoal} setEditGoal={setEditGoal} onClose={()=>setGoalKid(null)} onSave={()=>saveGoal(goalKid)} centsShort={centsShort} xpToCents={xpToCents}/>}
+      {showAddChore&&<AddChoreModal cf={cf} setCf={setCf} kids={kids} onClose={()=>setShowAddChore(false)} onSave={addChore} toggleDay={toggleDay}/>}
+      {showAddKid&&<AddKidModal kf={kf} setKf={setKf} onClose={()=>setShowAddKid(false)} onSave={addKid}/>}
+      {showAddItem&&<AddItemModal itemF={itemF} setItemF={setItemF} onClose={()=>setShowAddItem(false)} onSave={addStoreItem}/>}
+      {editChore&&<EditChoreModal editChore={editChore} setEditChore={setEditChore} kids={kids} onSave={saveEditChore} onDelete={()=>deleteChore(editChore.id)}/>}
+      {editKid&&<EditKidModal editKid={editKid} setEditKid={setEditKid} onSave={saveEditKid}/>}
       <BottomNav/>
 
       <div className="app">
