@@ -193,6 +193,7 @@ button,input,select,textarea{font-family:var(--f);}
 .cday.fut{color:var(--tx3);cursor:default;pointer-events:none;}
 .cday.hact::after{content:'';position:absolute;bottom:3px;width:4px;height:4px;border-radius:50%;background:var(--te);}
 .cday.hpend::after{background:var(--am);}
+.cday.hmiss::after{content:'';position:absolute;bottom:3px;width:4px;height:4px;border-radius:50%;background:var(--co);}
 
 /* ── Approval queue ── */
 .aqr{display:flex;align-items:center;gap:11px;padding:12px 15px;border-bottom:1px solid var(--b1);}
@@ -251,6 +252,12 @@ select.fi{cursor:pointer;}
 .lvlbox p{color:rgba(255,255,255,.8);font-size:14px;margin-top:3px;}
 @keyframes lvlIn{from{opacity:0;transform:scale(.4);}to{opacity:1;transform:none;}}
 
+/* ── Goal unlock banner ── */
+.unlock-bd{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:300;pointer-events:none;background:rgba(0,0,0,.52);}
+.unlock-box{background:linear-gradient(135deg,#0f6e56,#2dd4a7);border-radius:var(--rl);padding:30px 50px;text-align:center;box-shadow:0 0 80px rgba(45,212,167,.4);animation:lvlIn .44s cubic-bezier(.34,1.56,.64,1);}
+.unlock-box h2{font-size:28px;font-weight:900;color:#fff;}
+.unlock-box p{color:rgba(255,255,255,.85);font-size:14px;margin-top:5px;}
+
 /* ── Buy banner ── */
 .buy-banner{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--s1);border:1px solid rgba(74,196,125,.3);border-radius:var(--r);padding:14px 22px;display:flex;align-items:center;gap:12px;box-shadow:var(--sh);z-index:500;animation:buyIn .35s cubic-bezier(.34,1.56,.64,1);}
 @keyframes buyIn{from{opacity:0;transform:translateX(-50%) translateY(20px);}to{opacity:1;transform:translateX(-50%) translateY(0);}}
@@ -286,7 +293,7 @@ select.fi{cursor:pointer;}
 .km-ct.done{text-decoration:line-through;color:var(--tx3);}
 .km-rw{display:flex;gap:6px;}
 .km-rp{display:flex;align-items:center;gap:3px;font-size:11px;font-weight:700;padding:2px 7px;border-radius:5px;}
-.km-ck{width:38px;height:38px;border-radius:50%;border:2px solid var(--b2);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .15s;flex-shrink:0;background:none;font-size:18px;}
+.km-ck{width:38px;height:38px;border-radius:50%;border:2px solid var(--b2);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .15px;flex-shrink:0;background:none;font-size:18px;}
 .km-ck:hover{border-color:var(--pu);background:rgba(124,111,247,.13);}
 .km-ck.done{background:var(--te);border-color:var(--te);}
 .km-ck.pend{background:rgba(245,166,35,.2);border-color:var(--am);}
@@ -314,6 +321,17 @@ select.fi{cursor:pointer;}
 .empty{text-align:center;padding:40px 18px;color:var(--tx3);}
 .emptyic{font-size:36px;margin-bottom:9px;}
 .emptytx{font-size:13px;}
+
+/* ── Weekly summary card ── */
+.week-summary{background:var(--s1);border:1px solid var(--b1);border-radius:var(--r);padding:16px;margin-bottom:20px;}
+.week-summary-title{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.09em;color:var(--tx2);margin-bottom:12px;}
+.week-row{display:flex;align-items:center;gap:10px;margin-bottom:8px;}
+.week-row:last-child{margin-bottom:0;}
+.week-bar-wrap{flex:1;height:6px;background:var(--s3);border-radius:3px;overflow:hidden;}
+.week-bar{height:100%;border-radius:3px;transition:width .7s cubic-bezier(.34,1.56,.64,1);}
+
+/* ── Pending nav badge ── */
+.nav-badge{background:var(--am);color:#1a0e00;font-size:9px;font-weight:900;padding:1px 5px;border-radius:6px;margin-left:auto;}
 
 @media(max-width:680px){
   .sidebar{display:none;}
@@ -356,10 +374,11 @@ select.fi{cursor:pointer;}
 /* ── Bottom nav (mobile) ── */
 .bottom-nav{display:none;position:fixed;bottom:0;left:0;right:0;background:rgba(19,19,31,.96);backdrop-filter:blur(12px);border-top:1px solid var(--b1);z-index:30;padding:0 0 env(safe-area-inset-bottom);}
 .bn-inner{display:flex;justify-content:space-around;padding:6px 0;}
-.bn-item{display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 14px;cursor:pointer;border:none;background:none;color:var(--tx3);transition:all .13s;font-family:var(--f);border-radius:var(--rs);}
+.bn-item{display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 14px;cursor:pointer;border:none;background:none;color:var(--tx3);transition:all .13s;font-family:var(--f);border-radius:var(--rs);position:relative;}
 .bn-item.act{color:var(--pul);}
 .bn-item .bn-ic{font-size:18px;line-height:1;}
 .bn-item .bn-lb{font-size:9px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;}
+.bn-badge{position:absolute;top:2px;right:8px;background:var(--am);color:#1a0e00;font-size:8px;font-weight:900;padding:1px 4px;border-radius:5px;}
 @media(max-width:680px){.bottom-nav{display:block;}}
 
 /* ── Balance lock ── */
@@ -382,12 +401,14 @@ select.fi{cursor:pointer;}
 .edit-btn:hover{border-color:var(--b2);color:var(--tx2);}
 .del-btn{background:none;border:1px solid var(--b1);border-radius:var(--rs);padding:4px 9px;font-size:11px;font-weight:600;color:var(--tx3);cursor:pointer;transition:all .13s;font-family:var(--f);}
 .del-btn:hover{border-color:rgba(240,96,96,.3);color:var(--co);}
+
+/* ── Deny note modal ── */
+.deny-modal{background:var(--s1);border:1px solid var(--b2);border-radius:var(--rl);padding:24px;width:400px;max-width:100%;box-shadow:0 24px 80px rgba(0,0,0,.65);animation:mmi .22s cubic-bezier(.34,1.2,.64,1);}
 `;
 
 /* ═══════════════════════════════════════════════════════════════════════════
    CONSTANTS & HELPERS
 ═══════════════════════════════════════════════════════════════════════════ */
-// Safe color lookup — never crashes on undefined colorIdx
 function getColor(idx){return COLORS[idx]||COLORS[0];}
 const COLORS=[
   {bg:"#7c6ff7",tx:"#fff",gw:"#7c6ff7"},
@@ -397,14 +418,12 @@ const COLORS=[
   {bg:"#4a9eff",tx:"#fff",gw:"#4a9eff"},
   {bg:"#888780",tx:"#fff",gw:"#888780"},
 ];
-// Parent profiles — chore tracking only, no XP/store
 const PARENTS0=[
   {id:"p1",name:"Greg",  colorIdx:4,initials:"GW",isParent:true},
   {id:"p2",name:"Parent 2",colorIdx:5,initials:"P2",isParent:true},
 ];
 
-// 10 XP = $1.00 — store as cents to avoid float errors
-const XP_TO_CENTS = 10; // 10 XP = 100 cents = $1.00
+const XP_TO_CENTS = 10;
 function xpToCents(xp){ return xp * XP_TO_CENTS; }
 function centsToDisplay(c){ return `$${(c/100).toFixed(2)}`; }
 function centsShort(c){
@@ -413,18 +432,17 @@ function centsShort(c){
 }
 
 const DIFF={
-  trivial:{lbl:"Trivial",xp:5,  cls:"bd1",icon:"✨"}, // $0.50
-  easy:   {lbl:"Easy",   xp:10, cls:"bd2",icon:"⚡"}, // $1.00
-  medium: {lbl:"Medium", xp:25, cls:"bd3",icon:"🔥"}, // $2.50
-  hard:   {lbl:"Hard",   xp:50, cls:"bd4",icon:"💪"}, // $5.00
-  boss:   {lbl:"Boss",   xp:100,cls:"bd5",icon:"⚔️"}, // $10.00
+  trivial:{lbl:"Trivial",xp:5,  cls:"bd1",icon:"✨"},
+  easy:   {lbl:"Easy",   xp:10, cls:"bd2",icon:"⚡"},
+  medium: {lbl:"Medium", xp:25, cls:"bd3",icon:"🔥"},
+  hard:   {lbl:"Hard",   xp:50, cls:"bd4",icon:"💪"},
+  boss:   {lbl:"Boss",   xp:100,cls:"bd5",icon:"⚔️"},
 };
 
 const FREQ={daily:"Daily",weekly:"Weekly",monthly:"Monthly",once:"One-time"};
 const DAY_NAMES=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 const MONTHS=["January","February","March","April","May","June","July","August","September","October","November","December"];
 
-// Default store — prices in cents
 const DEFAULT_STORE=[
   {id:"s1", name:"30 min extra screen time", desc:"TV, YouTube, or games",          emoji:"📱", priceXp:20,  cat:"screen"},
   {id:"s2", name:"1 hour extra screen time",  desc:"Your choice of device",          emoji:"🖥️", priceXp:35,  cat:"screen"},
@@ -450,7 +468,6 @@ function isPast(dk){return dk<today();}
 function parseDate(dk){const[y,m,d]=dk.split('-').map(Number);return new Date(y,m-1,d);}
 function ckey(cid,kid){return`${cid}__${kid}`;}
 
-// Period keys
 function weekKey(dk){
   const d=parseDate(dk),jan1=new Date(d.getFullYear(),0,1);
   const wk=Math.ceil(((d-jan1)/86400000+jan1.getDay()+1)/7);
@@ -485,8 +502,6 @@ function useToasts(){
 }
 
 /* ─── Firebase hook ──────────────────────────────────────────────────────── */
-// Simplified: firebase.js handles init via env vars at module load time.
-// This hook just exposes the helpers and reports whether config is present.
 function useFB(){
   const ready = isConfigured();
   const write  = useCallback(dbWrite,  []);
@@ -497,7 +512,6 @@ function useFB(){
 }
 
 /* ─── PIN helpers ──────────────────────────────────────────────────────────── */
-// Simple hash — good enough for a family PIN, not for bank passwords.
 async function hashPIN(pin){
   const buf=await crypto.subtle.digest('SHA-256',new TextEncoder().encode('wh_salt_'+pin));
   return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
@@ -507,22 +521,19 @@ function getStoredPINHash(){return localStorage.getItem('wh_pin_hash')||null;}
 async function storePINHash(pin){localStorage.setItem('wh_pin_hash',await hashPIN(pin));}
 function isPINSet(){return!!getStoredPINHash();}
 
-/* ─── Streak reset helper (called on app load) ─────────────────────────────── */
+/* ─── Streak reset helper ─────────────────────────────────────────────────── */
 function checkStreakReset(kids,today_key){
   return kids.map(k=>{
     if(!k.lastActiveDate) return k;
     const last=k.lastActiveDate;
     const d1=new Date(last),d2=new Date(today_key);
     const diffDays=Math.round((d2-d1)/86400000);
-    if(diffDays>=2) return{...k,streak:0}; // missed a day — reset
+    if(diffDays>=2) return{...k,streak:0};
     return k;
   });
 }
 
 /* ─── Seed data ──────────────────────────────────────────────────────────── */
-// Goals: weeklyXpTarget + weeklyBonusCents (paid on hit)
-//        monthlyXpTarget + monthlyBonusCents (paid on hit)
-//        overageRate = cents per XP above monthly target (default = XP_TO_CENTS)
 const KIDS0=[
   {id:"k1",name:"Jordan",age:17,colorIdx:0,xp:420,streak:14,initials:"JW",
    balanceCents:4200,
@@ -535,17 +546,17 @@ const KIDS0=[
    goal:{weeklyXpTarget:40,weeklyBonusCents:200,monthlyXpTarget:150,monthlyBonusCents:800,overageRate:10}},
 ];
 const CHORES0=[
-  {id:"c1", title:"Make your bed",        diff:"trivial",freq:"daily",  scheduleType:"daily",scheduleDays:[],assignedTo:["k3"],      requiresApproval:false},
-  {id:"c2", title:"Unload dishwasher",    diff:"easy",   freq:"daily",  scheduleType:"daily",scheduleDays:[],assignedTo:["k2","k1"],  requiresApproval:false},
-  {id:"c6", title:"Set dinner table",     diff:"trivial",freq:"daily",  scheduleType:"daily",scheduleDays:[],assignedTo:["k3"],       requiresApproval:false},
-  {id:"c9", title:"Feed the dog",         diff:"trivial",freq:"daily",  scheduleType:"daily",scheduleDays:[],assignedTo:["k3"],       requiresApproval:false},
-  {id:"c10",title:"Wipe kitchen counters",diff:"easy",   freq:"daily",  scheduleType:"daily",scheduleDays:[],assignedTo:["k2"],       requiresApproval:false},
-  {id:"c7", title:"Tidy bedroom",         diff:"easy",   freq:"daily",  scheduleType:"fixed",scheduleDays:[1,3,5],assignedTo:["k1","k2","k3"],requiresApproval:false},
-  {id:"c11",title:"Take out trash",       diff:"easy",   freq:"daily",  scheduleType:"fixed",scheduleDays:[0,3],  assignedTo:["k1"],  requiresApproval:false},
-  {id:"c3", title:"Take out recycling",   diff:"easy",   freq:"weekly", scheduleType:"daily",scheduleDays:[],assignedTo:["k1"],        requiresApproval:false},
-  {id:"c4", title:"Vacuum living room",   diff:"medium", freq:"weekly", scheduleType:"daily",scheduleDays:[],assignedTo:["k2"],        requiresApproval:true},
-  {id:"c5", title:"Clean bathroom",       diff:"hard",   freq:"weekly", scheduleType:"daily",scheduleDays:[],assignedTo:["k1"],        requiresApproval:true},
-  {id:"c8", title:"Organize garage",      diff:"boss",   freq:"monthly",scheduleType:"daily",scheduleDays:[],assignedTo:["k1","k2"],   requiresApproval:true},
+  {id:"c1", title:"Make your bed",        diff:"trivial",freq:"daily",  scheduleType:"daily",scheduleDays:[],assignedTo:["k3"],      requiresApproval:false,upForGrabs:false},
+  {id:"c2", title:"Unload dishwasher",    diff:"easy",   freq:"daily",  scheduleType:"daily",scheduleDays:[],assignedTo:["k2","k1"],  requiresApproval:false,upForGrabs:false},
+  {id:"c6", title:"Set dinner table",     diff:"trivial",freq:"daily",  scheduleType:"daily",scheduleDays:[],assignedTo:["k3"],       requiresApproval:false,upForGrabs:false},
+  {id:"c9", title:"Feed the dog",         diff:"trivial",freq:"daily",  scheduleType:"daily",scheduleDays:[],assignedTo:["k3"],       requiresApproval:false,upForGrabs:false},
+  {id:"c10",title:"Wipe kitchen counters",diff:"easy",   freq:"daily",  scheduleType:"daily",scheduleDays:[],assignedTo:["k2"],       requiresApproval:false,upForGrabs:false},
+  {id:"c7", title:"Tidy bedroom",         diff:"easy",   freq:"daily",  scheduleType:"fixed",scheduleDays:[1,3,5],assignedTo:["k1","k2","k3"],requiresApproval:false,upForGrabs:false},
+  {id:"c11",title:"Take out trash",       diff:"easy",   freq:"daily",  scheduleType:"fixed",scheduleDays:[0,3],  assignedTo:["k1"],  requiresApproval:false,upForGrabs:false},
+  {id:"c3", title:"Take out recycling",   diff:"easy",   freq:"weekly", scheduleType:"daily",scheduleDays:[],assignedTo:["k1"],        requiresApproval:false,upForGrabs:false},
+  {id:"c4", title:"Vacuum living room",   diff:"medium", freq:"weekly", scheduleType:"daily",scheduleDays:[],assignedTo:["k2"],        requiresApproval:true, upForGrabs:false},
+  {id:"c5", title:"Clean bathroom",       diff:"hard",   freq:"weekly", scheduleType:"daily",scheduleDays:[],assignedTo:["k1"],        requiresApproval:true, upForGrabs:false},
+  {id:"c8", title:"Organize garage",      diff:"boss",   freq:"monthly",scheduleType:"daily",scheduleDays:[],assignedTo:["k1","k2"],   requiresApproval:true, upForGrabs:false},
 ];
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -557,7 +568,7 @@ function ConfigScreen({onSave,onSkip}){
   return(
     <div className="cfgwrap"><div className="cfgbox">
       <div className="cfglogo">Watts<span>Hub</span></div>
-      <p className="cfgsub">Connect Firebase for live sync across all devices. Config stays on this device only.</p>
+      <p className="cfgsub">Connect Firebase for live sync across all devices.</p>
       <div className="cfgdemo"><strong>Setup:</strong> Firebase Console → Project Settings → Apps → Web → Config object. Enable <strong>Realtime Database</strong> and set rules to test mode.</div>
       {fields.map(f=><div className="fg" key={f.k}><label className="fl">{f.lbl}</label><input className="fi" placeholder={f.lbl} value={cfg[f.k]} onChange={e=>setCfg(c=>({...c,[f.k]:e.target.value}))}/>{f.hint&&<div className="fhint">{f.hint}</div>}</div>)}
       <div className="fax"><button className="btn btn-g" onClick={onSkip}>Demo mode</button><button className="btn btn-p" onClick={()=>onSave(cfg)} disabled={!cfg.apiKey||!cfg.databaseURL}>Connect →</button></div>
@@ -566,12 +577,7 @@ function ConfigScreen({onSave,onSkip}){
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   MAIN APP
-═══════════════════════════════════════════════════════════════════════════ */
-/* ═══════════════════════════════════════════════════════════════════════════
    TOP-LEVEL MODAL COMPONENTS
-   Defined outside WattsHub so they never remount on parent re-renders.
-   All state passed as props — no closure over parent state.
 ═══════════════════════════════════════════════════════════════════════════ */
 
 function GoalModal({kid,editGoal,setEditGoal,onClose,onSave,centsShort,xpToCents}){
@@ -599,7 +605,6 @@ function GoalModal({kid,editGoal,setEditGoal,onClose,onSave,centsShort,xpToCents
         <option value={15}>$1.50 per extra XP (bonus rate)</option>
         <option value={20}>$2.00 per extra XP (double rate)</option>
       </select>
-      <div className="fhint">XP earned above the monthly target earns this rate on top of the base bonus.</div>
     </div>
     <div className="preview-box"><div className="preview-box-t">Preview</div><div className="preview-row">
       <div>📅 Hit <strong style={{color:"var(--bl)"}}>{eg.weeklyXpTarget} XP/week</strong> → <strong style={{color:"var(--bl)"}}>${(eg.weeklyBonusCents/100).toFixed(2)} bonus</strong></div>
@@ -610,6 +615,7 @@ function GoalModal({kid,editGoal,setEditGoal,onClose,onSave,centsShort,xpToCents
   </div></div>;
 }
 
+/* ── BATCH 1: AddChoreModal with Up for Grabs toggle ── */
 function AddChoreModal({cf,setCf,kids,parents,onClose,onSave,toggleDay}){
   const isFixed=cf.freq==="daily"&&cf.scheduleType==="fixed";
   const xp=DIFF[cf.diff]?.xp||0;
@@ -635,13 +641,28 @@ function AddChoreModal({cf,setCf,kids,parents,onClose,onSave,toggleDay}){
         {!cf.scheduleDays.length&&<div className="fhint" style={{color:"var(--co)",marginTop:6}}>Select at least one day.</div>}
       </>}
     </div>}
-    <div className="fg"><label className="fl">Assign to</label><div className="agrid">{[...(kids||[]),...(parents||[])].map(k=>{const cc=getColor(k.colorIdx);const sel=cf.assignedTo.includes(k.id);
+
+    {/* BATCH 1 FIX: Up for Grabs toggle */}
+    <div className="fg">
+      <div className="swrow" style={{padding:"5px 0"}}>
+        <div>
+          <label className="fl" style={{marginBottom:2}}>Up for Grabs</label>
+          <div className="fhint" style={{marginTop:0}}>Any family member can claim this chore</div>
+        </div>
+        <label className="sw"><input type="checkbox" checked={cf.upForGrabs||false}
+          onChange={e=>setCf(f=>({...f,upForGrabs:e.target.checked,assignedTo:e.target.checked?[]:f.assignedTo}))}/>
+          <div className="sw-tr"/><div className="sw-th"/></label>
+      </div>
+    </div>
+
+    {!cf.upForGrabs&&<div className="fg"><label className="fl">Assign to</label><div className="agrid">{[...(kids||[]),...(parents||[])].map(k=>{const cc=getColor(k.colorIdx);const sel=cf.assignedTo.includes(k.id);
       return <div key={k.id} className={`achip${sel?" sel":""}`} onClick={()=>setCf(f=>({...f,assignedTo:sel?f.assignedTo.filter(x=>x!==k.id):[...f.assignedTo,k.id]}))}>
         <span className="adot" style={{background:cc.bg}}/>{k.name}{k.isParent?" 👤":""}</div>;})}
-    </div></div>
-    <div className="fg"><div className="swrow"><label className="fl" style={{marginBottom:0}}>Requires approval</label>
+    </div></div>}
+
+    <div className="fg"><div className="swrow" style={{padding:"5px 0"}}><label className="fl" style={{marginBottom:0}}>Requires approval</label>
       <label className="sw"><input type="checkbox" checked={cf.requiresApproval} onChange={e=>setCf(f=>({...f,requiresApproval:e.target.checked}))}/><div className="sw-tr"/><div className="sw-th"/></label></div></div>
-    {xp>0&&<div className="fhint" style={{marginBottom:0}}>Earns: {xp} XP per completion (kids can convert to dollars anytime)</div>}
+    {xp>0&&<div className="fhint" style={{marginBottom:0}}>Earns: {xp} XP per completion</div>}
     <div className="fax"><button className="btn btn-g" onClick={onClose}>Cancel</button>
       <button className="btn btn-p" disabled={!cf.title.trim()||(!cf.upForGrabs&&!cf.assignedTo.length)||(isFixed&&!cf.scheduleDays.length)} onClick={onSave}>Add chore</button></div>
   </div></div>;
@@ -676,6 +697,7 @@ function AddItemModal({itemF,setItemF,onClose,onSave}){
   </div></div>;
 }
 
+/* ── BATCH 1 FIX: EditChoreModal with Up for Grabs toggle ── */
 function EditChoreModal({editChore,setEditChore,kids,parents,onSave,onDelete}){
   if(!editChore)return null;
   const ec=editChore;
@@ -703,11 +725,26 @@ function EditChoreModal({editChore,setEditChore,kids,parents,onSave,onDelete}){
           {name.slice(0,1)}</div>;
       })}</div>}
     </div>}
-    <div className="fg"><label className="fl">Assign to</label><div className="agrid">{[...(kids||[]),...(parents||[])].map(k=>{const cc=getColor(k.colorIdx);const sel=ec.assignedTo.includes(k.id);
+
+    {/* BATCH 1 FIX: Up for Grabs toggle */}
+    <div className="fg">
+      <div className="swrow" style={{padding:"5px 0"}}>
+        <div>
+          <label className="fl" style={{marginBottom:2}}>Up for Grabs</label>
+          <div className="fhint" style={{marginTop:0}}>Any family member can claim this chore</div>
+        </div>
+        <label className="sw"><input type="checkbox" checked={ec.upForGrabs||false}
+          onChange={e=>setEc(p=>({...p,upForGrabs:e.target.checked,assignedTo:e.target.checked?[]:p.assignedTo}))}/>
+          <div className="sw-tr"/><div className="sw-th"/></label>
+      </div>
+    </div>
+
+    {!ec.upForGrabs&&<div className="fg"><label className="fl">Assign to</label><div className="agrid">{[...(kids||[]),...(parents||[])].map(k=>{const cc=getColor(k.colorIdx);const sel=ec.assignedTo.includes(k.id);
       return <div key={k.id} className={`achip${sel?" sel":""}`} onClick={()=>setEc(p=>({...p,assignedTo:sel?p.assignedTo.filter(x=>x!==k.id):[...p.assignedTo,k.id]}))}>
         <span className="adot" style={{background:cc.bg}}/>{k.name}</div>;})}
-    </div></div>
-    <div className="fg"><div className="swrow"><label className="fl" style={{marginBottom:0}}>Requires approval</label>
+    </div></div>}
+
+    <div className="fg"><div className="swrow" style={{padding:"5px 0"}}><label className="fl" style={{marginBottom:0}}>Requires approval</label>
       <label className="sw"><input type="checkbox" checked={ec.requiresApproval} onChange={e=>setEc(p=>({...p,requiresApproval:e.target.checked}))}/><div className="sw-tr"/><div className="sw-th"/></label></div></div>
     <div className="fax">
       <button className="btn btn-no btn-sm" onClick={onDelete}>Delete</button>
@@ -733,7 +770,7 @@ function EditKidModal({editKid,setEditKid,onSave}){
   </div></div>;
 }
 
-/* ─── Delete chore modal ── */
+/* ── BATCH 2: Delete chore modal (unchanged) ── */
 function DeleteChoreModal({choreId,chores,onForward,onPermanent,onCancel}){
   const chore=chores.find(c=>c.id===choreId);
   if(!chore)return null;
@@ -744,19 +781,40 @@ function DeleteChoreModal({choreId,chores,onForward,onPermanent,onCancel}){
       <button className="btn" style={{background:"rgba(74,162,255,.1)",border:"1px solid rgba(74,162,255,.2)",color:"var(--bl)",padding:"14px 16px",textAlign:"left",borderRadius:"var(--r)",cursor:"pointer"}}
         onClick={onForward}>
         <div style={{fontWeight:800,marginBottom:3}}>📅 Delete going forward</div>
-        <div style={{fontSize:11,opacity:.8}}>Chore disappears from today onwards. Past completions and history are preserved.</div>
+        <div style={{fontSize:11,opacity:.8}}>Chore disappears from today onwards. Past completions preserved.</div>
       </button>
       <button className="btn" style={{background:"rgba(240,96,96,.07)",border:"1px solid rgba(240,96,96,.18)",color:"var(--co)",padding:"14px 16px",textAlign:"left",borderRadius:"var(--r)",cursor:"pointer"}}
         onClick={onPermanent}>
         <div style={{fontWeight:800,marginBottom:3}}>🗑️ Delete permanently</div>
-        <div style={{fontSize:11,opacity:.8}}>Removes the chore and all its history everywhere. Cannot be undone.</div>
+        <div style={{fontSize:11,opacity:.8}}>Removes the chore and all history. Cannot be undone.</div>
       </button>
     </div>
     <button className="btn btn-g" style={{width:"100%"}} onClick={onCancel}>Cancel</button>
   </div></div>;
 }
 
-/* ─── Grab chore card ── */
+/* ── BATCH 2: Deny with note modal ── */
+function DenyModal({denyTarget,onConfirm,onCancel}){
+  const[note,setNote]=useState("");
+  if(!denyTarget)return null;
+  return <div className="mbd" onClick={onCancel}><div className="deny-modal" onClick={e=>e.stopPropagation()}>
+    <div className="mt" style={{marginBottom:12}}>Deny task</div>
+    <div style={{fontSize:13,color:"var(--tx2)",marginBottom:14,lineHeight:1.5}}>
+      Optionally tell <strong style={{color:"var(--tx1)"}}>{denyTarget.kidName}</strong> why "{denyTarget.choreName}" was denied.
+    </div>
+    <div className="fg">
+      <label className="fl">Reason (optional)</label>
+      <input className="fi" autoFocus placeholder="e.g. Needs to be redone — missed the corners"
+        value={note} onChange={e=>setNote(e.target.value)}/>
+    </div>
+    <div className="fax">
+      <button className="btn btn-g" onClick={onCancel}>Cancel</button>
+      <button className="btn btn-no" onClick={()=>onConfirm(note)}>✕ Deny</button>
+    </div>
+  </div></div>;
+}
+
+/* ── Grab chore card ── */
 function GrabChoreCard({chore,dk,kids,parents,comps,grabs,activeKid,parentMode,claimGrab,releaseGrab,completeChore,ckey,DIFF,xpToCents,centsShort,isPast,streakMult,kidById}){
   const todayGrabs=grabs[dk]||{};
   const claimedBy=todayGrabs[chore.id]||null;
@@ -873,12 +931,8 @@ function ProfilePicker({kids,enterKidMode,enterParentMode,isPINSet}){
 
 function PINScreen({pinEntry,pinError,pinMode,pinStep,handlePINKey,onBack}){
   const dots=[0,1,2,3];
-  const label=pinMode==='set'
-    ?pinStep===1?'Set a parent PIN':'Confirm your PIN'
-    :'Enter parent PIN';
-  const sublabel=pinMode==='set'
-    ?pinStep===1?'Choose a 4-digit PIN you will remember':'Enter the same PIN again'
-    :'Required to access parent controls';
+  const label=pinMode==='set'?pinStep===1?'Set a parent PIN':'Confirm your PIN':'Enter parent PIN';
+  const sublabel=pinMode==='set'?pinStep===1?'Choose a 4-digit PIN you will remember':'Enter the same PIN again':'Required to access parent controls';
   return(
     <div className="pin-wrap">
       <div className="pin-box">
@@ -900,7 +954,6 @@ function PINScreen({pinEntry,pinError,pinMode,pinStep,handlePINKey,onBack}){
     </div>
   );
 }
-
 
 function BonusModal({kids,bonusKid,setBonusKid,bonusType,setBonusType,bonusAmt,setBonusAmt,bonusNote,setBonusNote,onClose,onSave}){
   const kid=kids.find(k=>k.id===bonusKid);
@@ -953,12 +1006,11 @@ export default function WattsHub(){
   const[parents,setParents]=useState(PARENTS0);
   const[chores,setChores]=useState(CHORES0);
   const[comps,setComps]=useState({});
-  // periodXp: { [weekKey|monthKey]: { [kidId]: totalXp } }
   const[periodXp,setPeriodXp]=useState({});
   const[storeItems,setStoreItems]=useState(DEFAULT_STORE);
   const[purchases,setPurchases]=useState([]);
   const[txLog,setTxLog]=useState([]);
-  const[grabs,setGrabs]=useState({}); // {dk:{choreId:memberId}}
+  const[grabs,setGrabs]=useState({});
 
   const[view,setView]=useState("dashboard");
   const[activeKid,setActiveKid]=useState(null);
@@ -975,29 +1027,31 @@ export default function WattsHub(){
   const[editGoal,setEditGoal]=useState({weeklyXpTarget:75,weeklyBonusCents:400,monthlyXpTarget:300,monthlyBonusCents:1500,overageRate:10});
   const[buyBanner,setBuyBanner]=useState(null);
   const[cf,setCf]=useState({title:"",diff:"easy",freq:"daily",scheduleType:"daily",scheduleDays:[],assignedTo:[],requiresApproval:false,upForGrabs:false});
-  const[editChore,setEditChore]=useState(null); // chore object being edited
-  const[deleteChoreTarget,setDeleteChoreTarget]=useState(null); // choreId pending delete decision
+  const[editChore,setEditChore]=useState(null);
+  const[deleteChoreTarget,setDeleteChoreTarget]=useState(null);
   const[kf,setKf]=useState({name:"",age:"",initials:""});
   const[editKid,setEditKid]=useState(null);
-  const[editParent,setEditParent]=useState(null); // parent object being edited
+  const[editParent,setEditParent]=useState(null);
   const[showBonus,setShowBonus]=useState(false);
-  const[bonusKid,setBonusKid]=useState(null); // kidId
-  const[bonusType,setBonusType]=useState("xp"); // xp|dollars|custom
-  const[bonusAmt,setBonusAmt]=useState(""); // XP or dollar string
+  const[bonusKid,setBonusKid]=useState(null);
+  const[bonusType,setBonusType]=useState("xp");
+  const[bonusAmt,setBonusAmt]=useState("");
   const[bonusNote,setBonusNote]=useState("");
   const[itemF,setItemF]=useState({name:"",desc:"",emoji:"🎁",priceXp:30});
-  const[editItem,setEditItem]=useState(null); // store item being edited
+  const[editItem,setEditItem]=useState(null);
   const[lvlUp,setLvlUp]=useState(null);
-  const[convertAmt,setConvertAmt]=useState(""); // XP amount to convert
+  // BATCH 3: goal unlock animation state
+  const[goalUnlock,setGoalUnlock]=useState(null); // {name, type:'weekly'|'monthly'}
+  // BATCH 2: deny modal state
+  const[denyTarget,setDenyTarget]=useState(null); // {dk,ck,kidName,choreName}
+  const[convertAmt,setConvertAmt]=useState("");
   const{toasts,add:toast}=useToasts();
 
-  // ── Auth / profile state ──
-  // screen: 'picker' | 'pin' | 'app'
   const[screen,setScreen]=useState('picker');
   const[pinEntry,setPinEntry]=useState('');
   const[pinError,setPinError]=useState(false);
-  const[pinMode,setPinMode]=useState('verify'); // 'verify' | 'set'
-  const[pinStep,setPinStep]=useState(1); // 1=enter, 2=confirm
+  const[pinMode,setPinMode]=useState('verify');
+  const[pinStep,setPinStep]=useState(1);
   const[pinFirst,setPinFirst]=useState('');
 
   useEffect(()=>{
@@ -1022,12 +1076,10 @@ export default function WattsHub(){
     return()=>u.forEach(f=>f());
   },[ready,listen]);
 
-  /* ── Startup: streak reset ── */
   useEffect(()=>{
     if(!kids.length)return;
     const todayKey=today();
     const reset=checkStreakReset(kids,todayKey);
-    // Only update kids whose streaks actually changed
     reset.forEach((k,i)=>{
       if(k.streak!==kids[i].streak){
         setKids(prev=>prev.map(p=>p.id===k.id?{...p,streak:0}:p));
@@ -1036,17 +1088,15 @@ export default function WattsHub(){
     });
   },[ready]); // eslint-disable-line
 
-  /* ── Startup: seed data guard — only write defaults if DB is empty ── */
   useEffect(()=>{
     if(!ready)return;
-    // Listen once for kids; if null (empty DB), seed defaults
     const unsub=listen('wh/kids',v=>{
       if(!v){
         KIDS0.forEach(k=>write(`wh/kids/${k.id}`,k));
         CHORES0.forEach(c=>write(`wh/chores/${c.id}`,c));
         PARENTS0.forEach(p=>write(`wh/parents/${p.id}`,p));
       }
-      unsub(); // one-shot
+      unsub();
     });
   },[ready]); // eslint-disable-line
 
@@ -1055,9 +1105,6 @@ export default function WattsHub(){
   const kidById=id=>kids.find(k=>k.id===id);
   const parentById=id=>parents.find(p=>p.id===id);
   const memberById=id=>kidById(id)||parentById(id);
-  const allMembers=[...kids,...parents].filter(m=>m&&m.id);
-  // Balance is fully locked (no spending) until monthly goal is met.
-  // This covers the cell-phone contribution — goal first, rewards second.
   const balanceUnlocked=kidId=>{
     const kid=kidById(kidId);
     if(!kid||!kid.goal)return true;
@@ -1102,12 +1149,9 @@ export default function WattsHub(){
 
   /* ── Award XP + dollars ── */
   async function awardEarnings(kidId,chore,dk){
-    // ── Economy: chores earn XP only. Kids convert XP→$ manually. ──
-    // Goal bonuses still pay out dollars when XP targets are hit.
     const isParentMember=parents.some(p=>p.id===kidId);
     const dayMult=(isPast(dk)&&dk!==today())?0.75:1;
 
-    // Parents: XP only, no balance, no goal bonuses
     if(isParentMember){
       const earnedXp=Math.round(DIFF[chore.diff].xp*dayMult);
       const wk=weekKey(dk);const mo=monthKey(dk);
@@ -1122,7 +1166,6 @@ export default function WattsHub(){
       return;
     }
 
-    // Kids: XP only from chores — no automatic cash
     const kid=kids.find(k=>k.id===kidId); if(!kid)return;
     const mult=streakMult(kid.streak);
     const earnedXp=Math.round(DIFF[chore.diff].xp*mult*dayMult);
@@ -1137,7 +1180,6 @@ export default function WattsHub(){
 
     const txEntry={id:"tx"+Date.now(),kidId,type:"earn",xp:earnedXp,cents:0,desc:chore.title,ts:Date.now()};
 
-    // Only update XP — balance unchanged until kid converts
     setKids(prev=>prev.map(k=>k.id===kidId?{...k,xp:newXp}:k));
     setPeriodXp(prev=>({...prev,[wk]:{...(prev[wk]||{}),[kidId]:newWkXp},[mo]:{...(prev[mo]||{}),[kidId]:newMoXp}}));
     setTxLog(prev=>[txEntry,...prev].slice(0,300));
@@ -1155,7 +1197,6 @@ export default function WattsHub(){
       setTimeout(()=>{setLvlUp({name:kid.name,level:newLvl});setTimeout(()=>setLvlUp(null),2300);},600);
     }
 
-    // Weekly goal hit → pay out dollar bonus
     const prevWkXp=getKidPeriodXp(kidId,wk);
     if(newWkXp>=kid.goal.weeklyXpTarget&&prevWkXp<kid.goal.weeklyXpTarget){
       const bonusCents=kid.goal.weeklyBonusCents;
@@ -1165,9 +1206,10 @@ export default function WattsHub(){
       setTxLog(prev=>[bonusTx,...prev].slice(0,300));
       if(ready){await merge(`wh/kids/${kidId}`,{balanceCents:bonusBalance});await write(`wh/txlog/${bonusTx.id}`,bonusTx);}
       setTimeout(()=>toast(`🎯 ${kid.name} hit weekly goal! +${centsShort(bonusCents)} added to balance`),500);
+      // BATCH 3: goal unlock animation
+      setTimeout(()=>{setGoalUnlock({name:kid.name,type:'weekly',bonus:centsShort(bonusCents)});setTimeout(()=>setGoalUnlock(null),2500);},800);
     }
 
-    // Monthly goal hit → pay out dollar bonus
     const prevMoXp=getKidPeriodXp(kidId,mo);
     if(newMoXp>=kid.goal.monthlyXpTarget&&prevMoXp<kid.goal.monthlyXpTarget){
       const bonusCents=kid.goal.monthlyBonusCents;
@@ -1177,15 +1219,18 @@ export default function WattsHub(){
       setKids(prev=>prev.map(k=>k.id===kidId?{...k,balanceCents:mBonusBalance}:k));
       setTxLog(prev=>[mTx,...prev].slice(0,300));
       if(ready){await merge(`wh/kids/${kidId}`,{balanceCents:mBonusBalance});await write(`wh/txlog/${mTx.id}`,mTx);}
-      setTimeout(()=>toast(`🏆 ${kid.name} hit monthly goal! +${centsShort(bonusCents)} added to balance`),700);
+      setTimeout(()=>toast(`🏆 ${kid.name} hit monthly goal! +${centsShort(bonusCents)} added`),700);
+      // BATCH 3: goal unlock animation — monthly unlocks the store, bigger celebration
+      setTimeout(()=>{setGoalUnlock({name:kid.name,type:'monthly',bonus:centsShort(bonusCents)});setTimeout(()=>setGoalUnlock(null),3000);},900);
     }
   }
 
-
   /* ── Up for Grabs — claim / release ── */
   async function claimGrab(choreId,memberId,dk){
-    // Check they don't already have an active grab today
     const todayGrabs=grabs[dk]||{};
+    // BATCH 1 FIX: clear UX feedback for already-claimed state
+    const alreadyClaimed=todayGrabs[choreId];
+    if(alreadyClaimed&&alreadyClaimed!==memberId){toast("Someone else already claimed this one!");return;}
     const alreadyHas=Object.entries(todayGrabs).some(([cid,mid])=>mid===memberId&&cid!==choreId);
     if(alreadyHas){toast("Finish your current grab chore first!");return;}
     const comp=comps[dk]?.[ckey(choreId,memberId)];
@@ -1224,18 +1269,26 @@ export default function WattsHub(){
     if(chore)await awardEarnings(kidId,chore,dk);
   }
 
-  async function denyComp(dk,ck){
-    const comp={...(comps[dk]?.[ck]||{}),status:"denied"};
-    setComps(prev=>({...prev,[dk]:{...(prev[dk]||{}),[ck]:comp}}));
-    if(ready)await write(`wh/comps/${dk}/${ck}`,comp);
-    toast("Task denied.");
+  /* ── BATCH 2: Deny with note ── */
+  function promptDeny(dk,ck,kidId,choreId){
+    const chore=chores.find(c=>c.id===choreId);
+    const kid=memberById(kidId);
+    setDenyTarget({dk,ck,kidId,choreId,kidName:kid?.name||'',choreName:chore?.title||''});
   }
 
+  async function confirmDeny(note){
+    if(!denyTarget)return;
+    const{dk,ck}=denyTarget;
+    const comp={...(comps[dk]?.[ck]||{}),status:"denied",denyNote:note||""};
+    setComps(prev=>({...prev,[dk]:{...(prev[dk]||{}),[ck]:comp}}));
+    if(ready)await write(`wh/comps/${dk}/${ck}`,comp);
+    toast(note?`Denied: "${note}"`:"Task denied.");
+    setDenyTarget(null);
+  }
 
-  /* ── Convert XP to dollars ── */
-  async function convertXP(kidId, xpAmount){
+  async function convertXP(kidId,xpAmount){
     const kid=kidById(kidId); if(!kid)return;
-    const xp=Math.floor(xpAmount); // must be whole XP
+    const xp=Math.floor(xpAmount);
     if(xp<=0||xp>kid.xp){toast("Not enough XP to convert!");return;}
     const earnedCents=xpToCents(xp);
     const newXp=kid.xp-xp;
@@ -1269,19 +1322,14 @@ export default function WattsHub(){
     const next=pinEntry+key;
     setPinEntry(next);
     if(next.length<4)return;
-    // PIN is 4 digits — process when full
     setTimeout(async()=>{
       if(pinMode==='verify'){
         const hash=getStoredPINHash();
-        if(!hash){
-          // No PIN set yet — go straight to app
-          setScreen('app');setPinEntry('');return;
-        }
+        if(!hash){setScreen('app');setPinEntry('');return;}
         const ok=await verifyPIN(next,hash);
         if(ok){setScreen('app');setParentMode(true);setPinEntry('');}
         else{setPinError(true);setTimeout(()=>{setPinEntry('');setPinError(false);},700);}
       } else {
-        // Setting a new PIN
         if(pinStep===1){setPinFirst(next);setPinEntry('');setPinStep(2);}
         else{
           if(next===pinFirst){
@@ -1298,12 +1346,8 @@ export default function WattsHub(){
   }
 
   function enterParentMode(){
-    if(!isPINSet()){
-      // First time — set a PIN
-      setPinMode('set');setPinStep(1);setPinEntry('');setPinFirst('');setScreen('pin');
-    } else {
-      setPinMode('verify');setPinEntry('');setScreen('pin');
-    }
+    if(!isPINSet()){setPinMode('set');setPinStep(1);setPinEntry('');setPinFirst('');setScreen('pin');}
+    else{setPinMode('verify');setPinEntry('');setScreen('pin');}
   }
 
   function enterKidMode(kidId){
@@ -1335,7 +1379,6 @@ export default function WattsHub(){
     setDeleteChoreTarget(null);toast('Chore permanently deleted.');
   }
 
-  /* ── Edit kid ── */
   async function saveEditParent(){
     if(!editParent||!editParent.name.trim())return;
     const updated={...editParent,name:editParent.name.trim(),initials:(editParent.initials||editParent.name.slice(0,2)).toUpperCase().slice(0,2)};
@@ -1395,21 +1438,12 @@ export default function WattsHub(){
       if(ready){await merge(`wh/kids/${bonusKid}`,{balanceCents:newBal});await write(`wh/txlog/${tx.id}`,tx);}
       toast(`🎁 ${kid.name} +${centsShort(cents)} bonus!`,0,cents);
     } else {
-      // Custom reward — just a note, no currency
       const tx={id:'tx'+Date.now(),kidId:bonusKid,type:'custom_reward',xp:0,cents:0,desc:note,ts:Date.now()};
       setTxLog(prev=>[tx,...prev].slice(0,300));
       if(ready)await write(`wh/txlog/${tx.id}`,tx);
       toast(`🎁 ${kid.name}: "${note}"`);
     }
     setShowBonus(false);setBonusKid(null);setBonusAmt('');setBonusNote('');setBonusType('xp');
-  }
-
-  async function updateParentName(pid,name,initials){
-    if(!name.trim())return;
-    const init=initials.trim()||name.slice(0,2).toUpperCase();
-    setParents(prev=>prev.map(p=>p.id===pid?{...p,name:name.trim(),initials:init}:p));
-    if(ready)await merge(`wh/parents/${pid}`,{name:name.trim(),initials:init});
-    toast('Parent profile updated!');
   }
 
   async function saveGoal(kidId){
@@ -1429,7 +1463,6 @@ export default function WattsHub(){
 
   async function saveEditItem(){
     if(!editItem||!editItem.name.trim())return;
-    // Only custom items (not DEFAULT_STORE) get saved to Firebase
     const isDefault=editItem.id.startsWith('s')&&!editItem.id.startsWith('custom');
     setStoreItems(prev=>prev.map(i=>i.id===editItem.id?editItem:i));
     if(ready&&!isDefault)await write(`wh/store/${editItem.id}`,editItem);
@@ -1440,14 +1473,13 @@ export default function WattsHub(){
     const isDefault=itemId.startsWith('s')&&!itemId.startsWith('custom');
     setStoreItems(prev=>prev.filter(i=>i.id!==itemId));
     if(ready&&!isDefault)await del(`wh/store/${itemId}`);
-    // For default items, store a "hidden" flag so they stay hidden after refresh
     if(ready&&isDefault)await write(`wh/hiddenStoreItems/${itemId}`,true);
     setEditItem(null);toast('Item removed from store.');
   }
 
   function toggleDay(dow){setCf(f=>{const days=f.scheduleDays.includes(dow)?f.scheduleDays.filter(d=>d!==dow):[...f.scheduleDays,dow].sort((a,b)=>a-b);return{...f,scheduleDays:days};});}
 
-  /* ── Calendar ── */
+  /* ── Calendar helpers ── */
   function calCells(){
     const{y,m}=calMonth;const first=new Date(y,m,1).getDay();const dim=new Date(y,m+1,0).getDate();const prev=new Date(y,m,0).getDate();const cells=[];
     for(let i=first-1;i>=0;i--)cells.push({day:prev-i,cur:false,m:m===0?11:m-1,y:m===0?y-1:y});
@@ -1458,6 +1490,14 @@ export default function WattsHub(){
   function cellDk(cell){return`${cell.y}-${String(cell.m+1).padStart(2,'0')}-${String(cell.day).padStart(2,'0')}`;}
   const dayHasAct=dk=>!!(comps[dk]&&Object.values(comps[dk]).some(c=>c.status==="approved"));
   const dayHasPend=dk=>!!(comps[dk]&&Object.values(comps[dk]).some(c=>c.status==="pending"));
+  // BATCH 3: missed day — chores existed but none were completed
+  const dayHasMiss=dk=>{
+    if(isFuture(dk)||dk===today())return false;
+    const hasChores=chores.some(c=>choreAppearsOnDate(c,dk)&&!c.upForGrabs);
+    if(!hasChores)return false;
+    const hasAnyComp=comps[dk]&&Object.values(comps[dk]).some(c=>c.status==="approved");
+    return !hasAnyComp;
+  };
   function shiftDate(dk,d){const dt=parseDate(dk);dt.setDate(dt.getDate()+d);const nk=dateKey(dt);if(!isFuture(nk)){setSelDate(nk);setView("chores");}}
 
   /* ══════════════════════════════════════════════════════════════════════
@@ -1474,7 +1514,6 @@ export default function WattsHub(){
     if(!wg||!mg)return null;
     return(
       <div className="goal-block">
-        {/* Weekly */}
         <div className="grow">
           <div className="ghead">
             <span className="glbl">Weekly</span>
@@ -1486,7 +1525,6 @@ export default function WattsHub(){
             {!wg.hit&&<span style={{marginLeft:3,opacity:.6}}>locked</span>}
           </span>
         </div>
-        {/* Monthly */}
         <div className="grow">
           <div className="ghead">
             <span className="glbl">Monthly</span>
@@ -1558,6 +1596,8 @@ export default function WattsHub(){
     const mult=activeKid?streakMult(kidById(activeKid)?.streak||0):1;
     const effectiveXp=Math.round(xp*(past?0.75:1)*mult);
     const effectiveDollars=centsShort(xpToCents(effectiveXp));
+    // denial note for this kid
+    const denyNote=myComp?.status==="denied"?myComp.denyNote:null;
 
     if(kidMode){
       return(
@@ -1565,6 +1605,7 @@ export default function WattsHub(){
           <div className="km-ci" style={{background:cardDone?"rgba(45,212,167,.1)":cardPend?"rgba(245,166,35,.1)":"var(--s2)"}}>{DIFF[chore.diff].icon}</div>
           <div style={{flex:1,minWidth:0}}>
             <div className={`km-ct${cardDone?" done":""}`}>{chore.title}</div>
+            {denyNote&&<div style={{fontSize:10,color:"var(--co)",marginTop:2}}>Denied: {denyNote}</div>}
             <div className="km-rw">
               <span className="km-rp" style={{background:"rgba(124,111,247,.14)",color:"var(--pul)"}}>+{effectiveXp} XP</span>
               <span className="km-rp" style={{background:"rgba(74,196,125,.14)",color:"var(--gn)"}}>{effectiveDollars}</span>
@@ -1611,6 +1652,11 @@ export default function WattsHub(){
             const k=memberById(s.kid); if(!k)return null;
             return <button key={s.kid} className="btn btn-ok btn-sm" onClick={()=>approveComp(viewDk,ckey(chore.id,s.kid),s.kid,chore.id)}>✓ {k.name}</button>;
           })}
+          {/* BATCH 2: deny button now opens note modal */}
+          {!activeKid&&cardPend&&parentMode&&allSt.filter(s=>s.comp?.status==="pending").map(s=>{
+            const k=memberById(s.kid); if(!k)return null;
+            return <button key={`deny-${s.kid}`} className="btn btn-no btn-sm" onClick={()=>promptDeny(viewDk,ckey(chore.id,s.kid),s.kid,chore.id)}>✕ {k.name}</button>;
+          })}
           {!activeKid&&parentMode&&!cardDone&&!cardPend&&chore.assignedTo.map(kidId=>{
             const k=memberById(kidId); if(!k)return null;
             const comp=getComp(viewDk,chore.id,kidId);
@@ -1638,10 +1684,18 @@ export default function WattsHub(){
         <div style={{padding:"0 8px 8px"}}><div className="cgrid">
           {DAY_NAMES.map(d=><div key={d} className="cdow">{d}</div>)}
           {cells.map((cell,i)=>{const dk=cellDk(cell);const fut=isFuture(dk);
-            return <div key={i} className={`cday${!cell.cur?" oth":""}${dk===today()?" tod":""}${selDate===dk&&cell.cur?" sel":""}${fut?" fut":""}${dayHasPend(dk)?" hpend":dayHasAct(dk)?" hact":""}`}
+            // BATCH 3: missed day dot — red dot, lower priority than pending/active
+            const missClass=cell.cur&&!fut&&dayHasMiss(dk)?" hmiss":"";
+            return <div key={i} className={`cday${!cell.cur?" oth":""}${dk===today()?" tod":""}${selDate===dk&&cell.cur?" sel":""}${fut?" fut":""}${dayHasPend(dk)?" hpend":dayHasAct(dk)?" hact":missClass}`}
               onClick={()=>{if(!fut&&cell.cur){setSelDate(dk);setView("chores");}}}>{cell.day}</div>;
           })}
         </div></div>
+        {/* BATCH 3: calendar legend */}
+        <div style={{display:"flex",gap:12,padding:"8px 16px",borderTop:"1px solid var(--b1)",fontSize:10,color:"var(--tx3)"}}>
+          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:6,height:6,borderRadius:"50%",background:"var(--te)",display:"inline-block"}}/> Done</span>
+          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:6,height:6,borderRadius:"50%",background:"var(--am)",display:"inline-block"}}/> Pending</span>
+          <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:6,height:6,borderRadius:"50%",background:"var(--co)",display:"inline-block"}}/> Missed</span>
+        </div>
       </div>
     );
   }
@@ -1664,7 +1718,7 @@ export default function WattsHub(){
           <span style={{fontSize:24}}>🔒</span>
           <div style={{flex:1}}>
             <div style={{fontSize:13,fontWeight:800,color:"var(--co)"}}>Store locked — monthly goal not yet met</div>
-            <div style={{fontSize:11,color:"var(--tx2)",marginTop:2}}>Hit your monthly XP goal to unlock the store. {mg.earned} of {mg.target} XP earned this month.</div>
+            <div style={{fontSize:11,color:"var(--tx2)",marginTop:2}}>{mg.earned} of {mg.target} XP earned this month.</div>
             <div className="lock-prog"><div className="lock-fill" style={{width:`${Math.min(mg.pct*100,100)}%`}}/></div>
           </div>
         </div>}
@@ -1695,7 +1749,6 @@ export default function WattsHub(){
         </div>
         {parentMode&&<div style={{marginTop:20,display:"flex",gap:8}}>
           <button className="btn btn-g" onClick={()=>setShowAddItem(true)}>+ Add item</button>
-          {!kid&&<span style={{fontSize:11,color:"var(--tx3)",alignSelf:"center"}}>Tap Edit/Remove on any item above</span>}
         </div>}
       </>
     );
@@ -1731,12 +1784,11 @@ export default function WattsHub(){
 
     return(
       <>
-        {/* Balance hero */}
         <div className="balance-hero">
           <div className="bal-main">
             <div className={`bal-amt${balanceUnlocked(kid.id)?"":" bal-locked"}`}>
-            {balanceUnlocked(kid.id)?"":"🔒 "}{centsToDisplay(kid.balanceCents||0)}
-          </div>
+              {balanceUnlocked(kid.id)?"":"🔒 "}{centsToDisplay(kid.balanceCents||0)}
+            </div>
             <div className="bal-lbl">{kid.name}'s {balanceUnlocked(kid.id)?"spendable":"locked"} balance</div>
             {!balanceUnlocked(kid.id)&&<div className="bal-pending" style={{color:"var(--co)"}}>Complete monthly goal to unlock spending</div>}
             <div style={{marginTop:10,fontSize:11,color:"var(--tx2)"}}>10 XP = $1.00 · Streak multiplier: {streakMult(kid.streak)}x</div>
@@ -1748,7 +1800,6 @@ export default function WattsHub(){
           </div>
         </div>
 
-        {/* Goal summary */}
         {(wg||mg)&&<div className="card" style={{marginBottom:16}}>
           <div style={{fontSize:13,fontWeight:800,marginBottom:14}}>Goal progress</div>
           {wg&&<div style={{marginBottom:12}}>
@@ -1773,7 +1824,6 @@ export default function WattsHub(){
           </div>}
         </div>}
 
-        {/* TX log */}
         <div className="sh"><span className="sht">Transaction history</span><span className="shc">{kidTxs.length}</span></div>
         <div className="card0">
           {!kidTxs.length&&<div className="empty"><div className="emptyic">📋</div><div className="emptytx">No transactions yet.</div></div>}
@@ -1806,7 +1856,11 @@ export default function WattsHub(){
     const pct=Math.min(xpThis/xpNeed,1);
     const wg=weekGoalStatus(kid);const mg=monthGoalStatus(kid);
     const myChores=chores.filter(ch=>ch.assignedTo.includes(kid.id)&&choreAppearsOnDate(ch,today()));
+    // BATCH 1 FIX: include grab chores in Kid Mode
+    const grabChores=chores.filter(c=>c.upForGrabs&&choreAppearsOnDate(c,today())&&!c.deletedAfter);
     const filtered=storeCat==="all"?storeItems:storeItems.filter(i=>i.cat===storeCat);
+    const mult=streakMult(kid.streak);
+
     return(
       <div className="km">
         <div className="km-hd">
@@ -1819,13 +1873,18 @@ export default function WattsHub(){
             </div>
             <div style={{flex:1}}>
               <div className="km-name">{kid.name}</div>
+              {/* BATCH 3 FIX: streak display in kid mode header */}
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                {kid.streak>0&&<span style={{fontSize:12,fontWeight:700,color:kid.streak>=7?"var(--am)":"var(--tx2)"}}>
+                  {kid.streak>=7?"🔥":"⚡"} {kid.streak}-day streak{mult>1?` · ${mult}x XP`:""}
+                </span>}
+              </div>
               <div style={{marginBottom:4}}>
                 <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:"var(--tx2)",marginBottom:3}}><span>Level {lvl}</span><span>{xpThis}/{xpNeed} XP</span></div>
                 <div style={{height:5,background:"var(--s3)",borderRadius:3,overflow:"hidden"}}>
                   <div style={{height:"100%",borderRadius:3,background:c.bg,width:`${pct*100}%`,transition:"width .7s cubic-bezier(.34,1.56,.64,1)"}}/>
                 </div>
               </div>
-              {kid.streak>=4&&<span style={{fontSize:11,fontWeight:700,color:"var(--am)"}}>🔥 {kid.streak}-day streak!</span>}
             </div>
             <div className="km-bal">
               <div className="km-bal-amt">{centsToDisplay(kid.balanceCents||0)}</div>
@@ -1847,14 +1906,22 @@ export default function WattsHub(){
                 <div style={{fontSize:11,fontWeight:800,color:"var(--tx2)",margin:"14px 0 10px",textTransform:"uppercase",letterSpacing:".07em"}}>Recurring</div>
                 {myChores.filter(c=>c.freq!=="daily").map(ch=><ChoreCard key={ch.id} chore={ch} dk={today()} kidMode/>)}
               </>}
-              {myChores.length===0&&<div className="empty"><div className="emptyic">🎉</div><div className="emptytx">All done for today!</div></div>}
+              {/* BATCH 1 FIX: Up for Grabs section in Kid Mode */}
+              {grabChores.length>0&&<>
+                <div style={{fontSize:11,fontWeight:800,color:"var(--am)",margin:"14px 0 6px",textTransform:"uppercase",letterSpacing:".07em"}}>🙋 Up for Grabs</div>
+                <div style={{background:"rgba(245,166,35,.06)",border:"1px solid rgba(245,166,35,.15)",borderRadius:"var(--rs)",padding:"7px 11px",marginBottom:10,fontSize:11,color:"var(--am)"}}>
+                  Claim one to earn bonus XP. One at a time.
+                </div>
+                {grabChores.map(c=><GrabChoreCard key={c.id} chore={c} dk={today()} kids={kids} parents={parents} comps={comps} grabs={grabs} activeKid={activeKid} parentMode={false} claimGrab={claimGrab} releaseGrab={releaseGrab} completeChore={completeChore} ckey={ckey} DIFF={DIFF} xpToCents={xpToCents} centsShort={centsShort} isPast={isPast} streakMult={streakMult} kidById={kidById}/>)}
+              </>}
+              {myChores.length===0&&grabChores.length===0&&<div className="empty"><div className="emptyic">🎉</div><div className="emptytx">All done for today!</div></div>}
             </>
           )}
           {kmView==="store"&&(
             <>
               <div style={{background:"var(--s2)",borderRadius:"var(--rs)",padding:"11px 14px",marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <span style={{fontSize:13,fontWeight:700}}>Your balance</span>
-                <span style={{fontSize:18,fontWeight:900,fontFamily:"var(--fm)",color:"var(--gn)"}}>{centsToDisplay(kid.balanceCents||0)}</span>
+                <span style={{fontSize:13,fontWeight:700}}>Your XP</span>
+                <span style={{fontSize:18,fontWeight:900,fontFamily:"var(--fm)",color:"var(--pul)"}}>{kid.xp} XP</span>
               </div>
               <div className="store-tabs" style={{flexWrap:"nowrap",overflowX:"auto",paddingBottom:4}}>
                 {STORE_CATS.map(cat=><button key={cat} className={`store-tab${storeCat===cat?" on":""}`} onClick={()=>setStoreCat(cat)}>{cat.charAt(0).toUpperCase()+cat.slice(1)}</button>)}
@@ -1867,7 +1934,7 @@ export default function WattsHub(){
                   <div className="km-si">{item.emoji}</div>
                   <div style={{flex:1}}><div className="km-sn">{item.name}</div>{item.desc&&<div className="km-sd">{item.desc}</div>}</div>
                   <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4,flexShrink:0}}>
-                    <div style={{fontSize:13,fontWeight:900,fontFamily:"var(--fm)",color:"var(--gn)"}}>{centsToDisplay(item.priceCents)}</div>
+                    <div style={{fontSize:13,fontWeight:900,fontFamily:"var(--fm)",color:"var(--pul)"}}>{item.priceXp||0} XP</div>
                     {!bought&&<button className="km-buy" disabled={!canAfford||!storeOpen} onClick={()=>buyItem(item,kid.id)}>{!storeOpen?"🔒 Goal first":canAfford?"Redeem":"🔒 Need more XP"}</button>}
                     {bought&&<span style={{fontSize:11,color:"var(--te)",fontWeight:700}}>✓</span>}
                   </div>
@@ -1891,7 +1958,7 @@ export default function WattsHub(){
                 <div className="gtrack" style={{height:7,marginBottom:6}}><div className="gfill" style={{width:`${mg.pct*100}%`,background:mg.hit?"var(--te)":"var(--pu)"}}/></div>
                 <div style={{fontSize:11,color:mg.hit?"var(--te)":"var(--tx2)"}}>
                   {mg.hit?`🏆 Base: ${centsShort(mg.bonus)}${mg.over?` + ${centsShort(mg.overCents)} overage!`:""}`:
-                   `Base on completion: ${centsShort(mg.bonus)} · Each extra XP above goal = $${(mg.goal?.overageRate||10)/100} more`}
+                   `Base on completion: ${centsShort(mg.bonus)}`}
                 </div>
               </div>}
               <div style={{fontSize:11,fontWeight:800,color:"var(--tx2)",marginBottom:8,textTransform:"uppercase",letterSpacing:".07em"}}>Recent</div>
@@ -1917,21 +1984,46 @@ export default function WattsHub(){
      PARENT VIEWS
   ═══════════════════════════════════════════════════════════════════════ */
   const pend=pending();
+  const pendCount=pend.length;
   const todayDone=Object.values(comps[today()]||{}).filter(c=>c.status==="approved").length;
 
   function DashboardView(){
+    // BATCH 3: weekly summary card per kid
+    const wkSummary=kids.map(k=>{
+      const wg=weekGoalStatus(k);
+      return{kid:k,earned:wg?.earned||0,target:wg?.target||1,hit:wg?.hit||false};
+    });
+    const maxEarned=Math.max(...wkSummary.map(s=>s.earned),1);
+
     return(
       <>
         <div className="sg">
-          {[{lbl:"Done today",val:todayDone,c:"var(--te)"},{lbl:"Pending",val:pend.length,c:"var(--am)"},{lbl:"Chores",val:chores.length,c:"var(--pul)"},{lbl:"Members",val:kids.length,c:"var(--pk)"}]
+          {[{lbl:"Done today",val:todayDone,c:"var(--te)"},{lbl:"Pending",val:pendCount,c:"var(--am)"},{lbl:"Chores",val:chores.length,c:"var(--pu)"},{lbl:"Members",val:kids.length,c:"var(--pk)"}]
             .map(s=><div className="sc" key={s.lbl}><div className="sn" style={{color:s.c}}>{s.val}</div><div className="sl">{s.lbl}</div></div>)}
         </div>
-        {/* Goal hit banners */}
+
+        {/* BATCH 3: weekly XP summary card */}
+        {kids.length>0&&<div className="week-summary">
+          <div className="week-summary-title">This week — XP earned</div>
+          {wkSummary.map(({kid:k,earned,target,hit})=>{
+            const c=getColor(k.colorIdx);
+            const pct=Math.min(earned/Math.max(target,1),1);
+            return <div className="week-row" key={k.id}>
+              <div style={{width:28,height:28,borderRadius:"50%",background:c.bg,color:c.tx,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:900,flexShrink:0}}>{k.initials}</div>
+              <div style={{fontSize:12,fontWeight:700,width:64,flexShrink:0}}>{k.name}</div>
+              <div className="week-bar-wrap">
+                <div className="week-bar" style={{width:`${pct*100}%`,background:hit?"var(--te)":c.bg}}/>
+              </div>
+              <div style={{fontSize:11,fontWeight:800,fontFamily:"var(--fm)",width:52,textAlign:"right",flexShrink:0,color:hit?"var(--te)":"var(--tx2)"}}>{earned} XP{hit?" ✓":""}</div>
+            </div>;
+          })}
+        </div>}
+
         {kids.map(k=>{
           const wg=weekGoalStatus(k);const mg=monthGoalStatus(k);
           return[
             wg?.hit&&<div key={`wg-${k.id}`} className="gbanner gb-w"><div style={{fontSize:22}}>🎯</div><div><div style={{fontSize:13,fontWeight:800}}>{k.name} hit their weekly goal!</div><div style={{fontSize:11,color:"var(--tx2)",marginTop:2}}>{wg.earned}/{wg.target} XP · <strong style={{color:"var(--bl)"}}>+{centsShort(wg.bonus)} bonus</strong></div></div></div>,
-            mg?.hit&&<div key={`mg-${k.id}`} className="gbanner gb-m"><div style={{fontSize:22}}>🏆</div><div><div style={{fontSize:13,fontWeight:800}}>{k.name} {mg.over?"exceeded":"hit"} their monthly goal!</div><div style={{fontSize:11,color:"var(--tx2)",marginTop:2}}>{mg.earned}/{mg.target} XP · <strong style={{color:"var(--am)"}}>{centsShort(mg.totalBonus)} total payout</strong>{mg.over?` (+${mg.over} XP over)`:""}</div></div></div>,
+            mg?.hit&&<div key={`mg-${k.id}`} className="gbanner gb-m"><div style={{fontSize:22}}>🏆</div><div><div style={{fontSize:13,fontWeight:800}}>{k.name} {mg.over?"exceeded":"hit"} their monthly goal!</div><div style={{fontSize:11,color:"var(--tx2)",marginTop:2}}>{mg.earned}/{mg.target} XP · <strong style={{color:"var(--am)"}}>{centsShort(mg.totalBonus)} total payout</strong></div></div></div>,
           ];
         })}
         <div className="sh" style={{marginBottom:12}}><span className="sht">Family</span>
@@ -1974,7 +2066,8 @@ export default function WattsHub(){
                 </div>
                 <div className="aqa">
                   <button className="btn btn-ok btn-sm" onClick={()=>approveComp(p.dk,p.ck,p.kidId,p.choreId)}>✓ Approve</button>
-                  <button className="btn btn-no btn-sm" onClick={()=>denyComp(p.dk,p.ck)}>✕ Deny</button>
+                  {/* BATCH 2: deny now opens note modal */}
+                  <button className="btn btn-no btn-sm" onClick={()=>promptDeny(p.dk,p.ck,p.kidId,p.choreId)}>✕ Deny</button>
                 </div>
               </div>;
             })}
@@ -1989,10 +2082,9 @@ export default function WattsHub(){
   function ChoresView(){
     const dk=selDate;const past=isPast(dk)&&dk!==today();
     const kid=activeKid?kidById(activeKid):null;
-    const activeParent=activeKid?parentById(activeKid):null;
     const list=chores.filter(c=>{
       if(!choreAppearsOnDate(c,dk))return false;
-      if(c.upForGrabs)return false; // shown separately
+      if(c.upForGrabs)return false;
       if(!activeKid)return true;
       return c.assignedTo.includes(activeKid);
     });
@@ -2052,11 +2144,7 @@ export default function WattsHub(){
     );
   }
 
-  /* ── Modals ── */
-  // Modals rendered via top-level components — see below WattsHub
-
-
-  /* ─── Bottom nav (mobile only) ── */
+  /* ── Bottom nav (mobile only) ── */
   function BottomNav(){
     const items=[
       {id:"dashboard",ic:"⬡",lbl:"Home"},
@@ -2073,6 +2161,8 @@ export default function WattsHub(){
               onClick={()=>{setView(n.id);if(!["chores","store","money"].includes(n.id))setActiveKid(null);}}>
               <span className="bn-ic">{n.ic}</span>
               <span className="bn-lb">{n.lbl}</span>
+              {/* BATCH 2: pending badge on Chores bottom nav */}
+              {n.id==="chores"&&pendCount>0&&<span className="bn-badge">{pendCount}</span>}
             </button>
           ))}
         </div>
@@ -2080,8 +2170,7 @@ export default function WattsHub(){
     );
   }
 
-  /* ─── Config / routing ── */
-  // Show profile picker or PIN screen when not in app
+  /* ─── Profile picker / PIN routing ── */
   if(screen==='picker')return(<><style>{CSS}</style><ProfilePicker kids={kids} enterKidMode={enterKidMode} enterParentMode={enterParentMode} isPINSet={isPINSet}/></>);
   if(screen==='pin')return(<><style>{CSS}</style><PINScreen pinEntry={pinEntry} pinError={pinError} pinMode={pinMode} pinStep={pinStep} handlePINKey={handlePINKey} onBack={()=>{setPinEntry('');setScreen('picker');}}/></>);
 
@@ -2091,9 +2180,12 @@ export default function WattsHub(){
         <style>{CSS}</style>
         <div className="twrap">{toasts.map(t=><div className="toast" key={t.id}>{t.xp&&<span className="t-xp">+{t.xp} XP</span>}{t.cents&&<span className="t-do">{centsShort(t.cents)}</span>}<span className="t-msg">{t.msg}</span></div>)}</div>
         {lvlUp&&<div className="lvlbd"><div className="lvlbox"><h2>Level Up! ⚡</h2><p>{lvlUp.name} reached Level {lvlUp.level}!</p></div></div>}
+        {/* BATCH 3: goal unlock animation in kid mode */}
+        {goalUnlock&&<div className="unlock-bd"><div className="unlock-box">
+          <h2>{goalUnlock.type==='monthly'?"🏆 Monthly Goal Hit!":"🎯 Weekly Goal Hit!"}</h2>
+          <p>{goalUnlock.name} earned a {goalUnlock.bonus} bonus!{goalUnlock.type==='monthly'?" Store is now unlocked 🛍️":""}</p>
+        </div></div>}
         {buyBanner&&<div className="buy-banner"><div style={{fontSize:28}}>{buyBanner.emoji}</div><div><div style={{fontSize:14,fontWeight:800}}>{buyBanner.name}</div><div style={{fontSize:11,color:"var(--tx2)",marginTop:2}}>Redeemed for {buyBanner.price} 🎉</div></div></div>}
-        {showBonus&&<BonusModal kids={kids} bonusKid={bonusKid} setBonusKid={setBonusKid} bonusType={bonusType} setBonusType={setBonusType} bonusAmt={bonusAmt} setBonusAmt={setBonusAmt} bonusNote={bonusNote} setBonusNote={setBonusNote} onClose={()=>setShowBonus(false)} onSave={giveBonus}/> }
-        {goalKid&&<GoalModal kid={kidById(goalKid)} editGoal={editGoal} setEditGoal={setEditGoal} onClose={()=>setGoalKid(null)} onSave={()=>saveGoal(goalKid)} centsShort={centsShort} xpToCents={xpToCents}/>}
         <KidMode/>
         <button onClick={()=>setScreen('picker')} style={{position:"fixed",bottom:20,right:20,background:"var(--s2)",border:"1px solid var(--b2)",borderRadius:"var(--rs)",padding:"8px 14px",fontSize:12,fontWeight:700,color:"var(--tx2)",cursor:"pointer",fontFamily:"var(--f)"}}>← Switch profile</button>
       </>
@@ -2114,6 +2206,11 @@ export default function WattsHub(){
       <style>{CSS}</style>
       <div className="twrap">{toasts.map(t=><div className="toast" key={t.id}>{t.xp&&<span className="t-xp">+{t.xp} XP</span>}{t.cents&&<span className="t-do">{centsShort(t.cents)}</span>}<span className="t-msg">{t.msg}</span></div>)}</div>
       {lvlUp&&<div className="lvlbd"><div className="lvlbox"><h2>Level Up! ⚡</h2><p>{lvlUp.name} reached Level {lvlUp.level}!</p></div></div>}
+      {/* BATCH 3: goal unlock animation */}
+      {goalUnlock&&<div className="unlock-bd"><div className="unlock-box">
+        <h2>{goalUnlock.type==='monthly'?"🏆 Monthly Goal Hit!":"🎯 Weekly Goal Hit!"}</h2>
+        <p>{goalUnlock.name} earned a {goalUnlock.bonus} bonus!{goalUnlock.type==='monthly'?" Store is now unlocked 🛍️":""}</p>
+      </div></div>}
       {buyBanner&&<div className="buy-banner"><div style={{fontSize:28}}>{buyBanner.emoji}</div><div><div style={{fontSize:14,fontWeight:800}}>{buyBanner.name}</div><div style={{fontSize:11,color:"var(--tx2)",marginTop:2}}>Redeemed for {buyBanner.price} 🎉</div></div></div>}
       {goalKid&&<GoalModal kid={kidById(goalKid)} editGoal={editGoal} setEditGoal={setEditGoal} onClose={()=>setGoalKid(null)} onSave={()=>saveGoal(goalKid)} centsShort={centsShort} xpToCents={xpToCents}/>}
       {showAddChore&&<AddChoreModal cf={cf} setCf={setCf} kids={kids} parents={parents} onClose={()=>setShowAddChore(false)} onSave={addChore} toggleDay={toggleDay}/>}
@@ -2125,6 +2222,8 @@ export default function WattsHub(){
       {editItem&&<EditItemModal editItem={editItem} setEditItem={setEditItem} onSave={saveEditItem} onDelete={()=>deleteStoreItem(editItem.id)}/>}
       {deleteChoreTarget&&<DeleteChoreModal choreId={deleteChoreTarget} chores={chores} onForward={()=>confirmDeleteForward(deleteChoreTarget)} onPermanent={()=>confirmDeletePermanent(deleteChoreTarget)} onCancel={()=>setDeleteChoreTarget(null)}/>}
       {showBonus&&<BonusModal kids={kids} bonusKid={bonusKid} setBonusKid={setBonusKid} bonusType={bonusType} setBonusType={setBonusType} bonusAmt={bonusAmt} setBonusAmt={setBonusAmt} bonusNote={bonusNote} setBonusNote={setBonusNote} onClose={()=>setShowBonus(false)} onSave={giveBonus}/>}
+      {/* BATCH 2: deny note modal */}
+      {denyTarget&&<DenyModal denyTarget={denyTarget} onConfirm={confirmDeny} onCancel={()=>setDenyTarget(null)}/>}
       <BottomNav/>
 
       <div className="app">
@@ -2135,6 +2234,8 @@ export default function WattsHub(){
             {[{id:"dashboard",ic:"⬡",lbl:"Dashboard"},{id:"chores",ic:"✓",lbl:"Chores"},{id:"store",ic:"🛍️",lbl:"Store"},{id:"money",ic:"💵",lbl:"Money"},{id:"activity",ic:"↻",lbl:"Activity"}].map(n=>(
               <button key={n.id} className={`ni${view===n.id?" act":""}`} onClick={()=>{setView(n.id);if(!["chores","store","money"].includes(n.id))setActiveKid(null);}}>
                 <span className="ic">{n.ic}</span>{n.lbl}
+                {/* BATCH 2: pending badge on sidebar Chores nav item */}
+                {n.id==="chores"&&pendCount>0&&<span className="nav-badge">{pendCount}</span>}
               </button>
             ))}
           </div>
@@ -2156,7 +2257,7 @@ export default function WattsHub(){
                 :<button className="btn-p btn btn-sm" onClick={enterParentMode}>Enter</button>
               }
             </div>
-            <button className="ni" style={{color:ready?"var(--te)":"var(--co)",marginTop:2}} onClick={()=>alert(ready?"Firebase is connected and syncing!":"Firebase not connected.\n\nCheck that VITE_FIREBASE_* env vars are set in your .env.local file or Netlify dashboard.")}><span className="ic">⚙</span>{ready?"Firebase: live":"Firebase: check config"}</button>
+            <button className="ni" style={{color:ready?"var(--te)":"var(--co)",marginTop:2}} onClick={()=>alert(ready?"Firebase is connected and syncing!":"Firebase not connected. Check VITE_FIREBASE_* env vars.")}><span className="ic">⚙</span>{ready?"Firebase: live":"Firebase: check config"}</button>
           </div>
         </aside>
 
@@ -2164,7 +2265,7 @@ export default function WattsHub(){
           <div className="topbar">
             <div><div style={{fontSize:17,fontWeight:800}}>{vm.t}</div><div style={{fontSize:11,color:"var(--tx2)",marginTop:1}}>{vm.s}</div></div>
             <div style={{display:"flex",alignItems:"center",gap:7}}>
-              {pend.length>0&&parentMode&&<span style={{background:"rgba(245,166,35,.13)",color:"var(--am)",fontSize:11,fontWeight:800,padding:"3px 8px",borderRadius:5}}>{pend.length} pending</span>}
+              {pendCount>0&&parentMode&&<span style={{background:"rgba(245,166,35,.13)",color:"var(--am)",fontSize:11,fontWeight:800,padding:"3px 8px",borderRadius:5}}>{pendCount} pending</span>}
               {ready&&<span style={{background:"rgba(45,212,167,.09)",color:"var(--te)",fontSize:11,fontWeight:800,padding:"3px 8px",borderRadius:5}}>● Live</span>}
               {parentMode&&view==="store"&&<button className="btn btn-g btn-sm" onClick={()=>setShowAddItem(true)}>+ Item</button>}
               {parentMode&&<button className="btn btn-p btn-sm" onClick={()=>setShowAddChore(true)}>+ Chore</button>}
