@@ -1587,7 +1587,9 @@ export default function WattsHub(){
     const past=isPast(viewDk)&&viewDk!==today();
     const myComp=activeKid?getComp(viewDk,chore.id,activeKid):null;
     const myStatus=myComp?.status||null;
-    const allSt=chore.assignedTo.map(kid=>({kid,comp:getComp(viewDk,chore.id,kid)}));
+    // Guard: assignedTo may be undefined on chores saved before this update
+    const assignedTo=chore.assignedTo||[];
+    const allSt=assignedTo.map(kid=>({kid,comp:getComp(viewDk,chore.id,kid)}));
     const cardDone=activeKid?myStatus==="approved":allSt.every(s=>s.comp?.status==="approved");
     const cardPend=activeKid?myStatus==="pending":allSt.some(s=>s.comp?.status==="pending");
     const sLabel=scheduleLabel(chore);
@@ -1633,9 +1635,9 @@ export default function WattsHub(){
           {cardDone&&<span className="badge ba">✓ Done</span>}
           {past&&!cardDone&&!cardPend&&<span className="badge bb">Past day</span>}
         </div>
-        {!activeKid&&(
+        {!activeKid&&!chore.upForGrabs&&(
           <div style={{display:"flex",gap:5,marginBottom:8,flexWrap:"wrap"}}>
-            {chore.assignedTo.map(kidId=>{
+            {assignedTo.map(kidId=>{
               const k=kidById(kidId); if(!k)return null;const cc=getColor(k.colorIdx);const comp=getComp(viewDk,chore.id,kidId);
               return <span key={kidId} style={{display:"flex",alignItems:"center",gap:4,fontSize:10,fontWeight:700,padding:"2px 6px",borderRadius:4,background:comp?.status==="approved"?"rgba(45,212,167,.1)":comp?.status==="pending"?"rgba(245,166,35,.1)":"var(--s2)",color:comp?.status==="approved"?"var(--te)":comp?.status==="pending"?"var(--am)":"var(--tx2)"}}>
                 <span style={{width:5,height:5,borderRadius:"50%",background:cc.bg,display:"inline-block"}}/>{k.name}{comp?.status==="approved"?" ✓":comp?.status==="pending"?" ⏳":""}
@@ -1657,7 +1659,7 @@ export default function WattsHub(){
             const k=memberById(s.kid); if(!k)return null;
             return <button key={`deny-${s.kid}`} className="btn btn-no btn-sm" onClick={()=>promptDeny(viewDk,ckey(chore.id,s.kid),s.kid,chore.id)}>✕ {k.name}</button>;
           })}
-          {!activeKid&&parentMode&&!cardDone&&!cardPend&&chore.assignedTo.map(kidId=>{
+          {!activeKid&&parentMode&&!cardDone&&!cardPend&&assignedTo.map(kidId=>{
             const k=memberById(kidId); if(!k)return null;
             const comp=getComp(viewDk,chore.id,kidId);
             if(comp&&comp.status!=="denied")return null;
@@ -1855,7 +1857,7 @@ export default function WattsHub(){
     const xpNeed=xpForLevel(lvl+1)-xpForLevel(lvl);
     const pct=Math.min(xpThis/xpNeed,1);
     const wg=weekGoalStatus(kid);const mg=monthGoalStatus(kid);
-    const myChores=chores.filter(ch=>ch.assignedTo.includes(kid.id)&&choreAppearsOnDate(ch,today()));
+    const myChores=chores.filter(ch=>(ch.assignedTo||[]).includes(kid.id)&&choreAppearsOnDate(ch,today()));
     // BATCH 1 FIX: include grab chores in Kid Mode
     const grabChores=chores.filter(c=>c.upForGrabs&&choreAppearsOnDate(c,today())&&!c.deletedAfter);
     const filtered=storeCat==="all"?storeItems:storeItems.filter(i=>i.cat===storeCat);
@@ -2040,7 +2042,7 @@ export default function WattsHub(){
           <div className="g2" style={{marginBottom:20}}>
             {parents.map(p=>{
               const cc=getColor(p.colorIdx);
-              const myChores=chores.filter(c=>c.assignedTo.includes(p.id)&&choreAppearsOnDate(c,today()));
+              const myChores=chores.filter(c=>(c.assignedTo||[]).includes(p.id)&&choreAppearsOnDate(c,today()));
               const doneCt=myChores.filter(c=>comps[today()]?.[ckey(c.id,p.id)]?.status==='approved').length;
               return <div key={p.id} style={{background:"var(--s1)",border:"1px solid var(--b1)",borderRadius:"var(--r)",padding:"13px 15px",display:"flex",alignItems:"center",gap:11}}>
                 <div style={{width:38,height:38,borderRadius:"50%",background:cc.bg,color:cc.tx,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:900,flexShrink:0}}>{p.initials}</div>
@@ -2086,7 +2088,7 @@ export default function WattsHub(){
       if(!choreAppearsOnDate(c,dk))return false;
       if(c.upForGrabs)return false;
       if(!activeKid)return true;
-      return c.assignedTo.includes(activeKid);
+      return (c.assignedTo||[]).includes(activeKid);
     });
     const grabChores=chores.filter(c=>c.upForGrabs&&choreAppearsOnDate(c,dk)&&!c.deletedAfter);
     const daily=list.filter(c=>c.freq==="daily");
