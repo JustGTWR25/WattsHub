@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+
+# ── SECRETS — NEVER COMMIT THESE ──────────────────
+# .env.local contains your real Firebase API keys.
+# .env.*.local files are for local overrides.
+.env.local
+.env.*.local
+# ──────────────────────────────────────────────────
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Vite
+*.local
