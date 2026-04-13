@@ -1,32 +1,8 @@
-/**
- * firebase.js
- *
- * Single source of truth for Firebase initialization.
- * All config values come from environment variables (VITE_ prefix).
- *
- * In development:  values come from .env.local (git-ignored)
- * In production:   values come from Netlify environment variables
- *
- * NEVER hardcode these values or commit them to git.
- */
+import { initializeApp, getApps } from "firebase/app";
+import { getDatabase, ref, set, get, update, remove, onValue, off } from "firebase/database";
+import { getMessaging, getToken, onMessage } from "firebase/messaging";
 
-import { initializeApp, getApps } from 'firebase/app'
-import {
-  getDatabase,
-  ref,
-  set,
-  update,
-  onValue,
-  off,
-  remove,
-  push,
-  serverTimestamp,
-} from 'firebase/database'
-
-// ── Config from env vars ────────────────────────────────────────────────────
-// Vite exposes any variable prefixed VITE_ to the client bundle at build time.
-// These are NOT secret — they identify your Firebase project.
-// Security comes from Firebase Security Rules, not from hiding these keys.
+/* ── Config (injected by Vite env vars) ── */
 const firebaseConfig = {
   apiKey:            import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain:        import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
@@ -35,68 +11,103 @@ const firebaseConfig = {
   storageBucket:     import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
   appId:             import.meta.env.VITE_FIREBASE_APP_ID,
+};
+
+export function isConfigured() {
+  return !!(firebaseConfig.apiKey && firebaseConfig.databaseURL);
 }
 
-// ── Validate config on startup ──────────────────────────────────────────────
-// Catches missing env vars immediately instead of a cryptic Firebase error.
-const REQUIRED = ['apiKey', 'authDomain', 'databaseURL', 'projectId', 'appId']
-const missing = REQUIRED.filter(k => !firebaseConfig[k])
+let app, db, messaging;
 
-if (missing.length > 0) {
-  console.error(
-    '[WattsHub] Missing Firebase env vars:',
-    missing.map(k => `VITE_FIREBASE_${k.replace(/([A-Z])/g, '_$1').toUpperCase()}`),
-    '\nAdd them to .env.local for development or Netlify env vars for production.'
-  )
-}
-
-// ── Initialize (guard against double-init in dev hot reload) ────────────────
-const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig)
-export const db = getDatabase(app)
-
-// ── Re-export helpers so the rest of the app imports from here ──────────────
-export { ref, set, update, onValue, off, remove, push, serverTimestamp }
-
-// ── Typed database helpers ──────────────────────────────────────────────────
-// Thin wrappers that handle errors gracefully instead of crashing the app.
-
-export async function dbWrite(path, data) {
-  try {
-    await set(ref(db, path), data)
-    return true
-  } catch (err) {
-    console.error('[WattsHub] dbWrite failed:', path, err)
-    return false
+function getApp() {
+  if (!app) {
+    app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
+    db = getDatabase(app);
+    // Messaging only available in secure contexts
+    try {
+      if (typeof window !== "undefined" && "serviceWorker" in navigator) {
+        messaging = getMessaging(app);
+      }
+    } catch (e) {
+      console.warn("FCM not available:", e.message);
+    }
   }
+  return { app, db, messaging };
 }
 
-export async function dbMerge(path, data) {
-  try {
-    await update(ref(db, path), data)
-    return true
-  } catch (err) {
-    console.error('[WattsHub] dbMerge failed:', path, err)
-    return false
-  }
+/* ── RTDB helpers ── */
+export async function dbWrite(path, value) {
+  if (!isConfigured()) return null;
+  const { db } = getApp();
+  await set(ref(db, path), value);
+  return value;
+}
+
+export async function dbMerge(path, value) {
+  if (!isConfigured()) return null;
+  const { db } = getApp();
+  await update(ref(db, path), value);
+  return value;
 }
 
 export async function dbDelete(path) {
+  if (!isConfigured()) return null;
+  const { db } = getApp();
+  await remove(ref(db, path));
+}
+
+export async function dbGet(path) {
+  if (!isConfigured()) return null;
+  const { db } = getApp();
+  const snap = await get(ref(db, path));
+  return snap.exists() ? snap.val() : null;
+}
+
+export function dbListen(path, cb) {
+  if (!isConfigured()) return () => {};
+  const { db } = getApp();
+  const r = ref(db, path);
+  onValue(r, snap => cb(snap.val()));
+  return () => off(r);
+}
+
+/* ── FCM: request permission + get token ── */
+export async function registerFCMToken(userId) {
+  if (!isConfigured()) return null;
+  const { messaging } = getApp();
+  if (!messaging) return null;
+
   try {
-    await remove(ref(db, path))
-    return true
-  } catch (err) {
-    console.error('[WattsHub] dbDelete failed:', path, err)
-    return false
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") return null;
+
+    // Register the service worker first
+    const sw = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
+
+    const token = await getToken(messaging, {
+      vapidKey: import.meta.env.VITE_FIREBASE_VAPID_KEY,
+      serviceWorkerRegistration: sw,
+    });
+
+    if (token) {
+      // Store token in RTDB keyed by userId so Cloud Functions can look it up
+      await dbWrite(`wh/fcmTokens/${userId}`, {
+        token,
+        updatedAt: Date.now(),
+        userAgent: navigator.userAgent.slice(0, 120),
+      });
+    }
+    return token;
+  } catch (e) {
+    console.warn("FCM token registration failed:", e.message);
+    return null;
   }
 }
 
-export function dbListen(path, callback) {
-  const r = ref(db, path)
-  onValue(r, snapshot => callback(snapshot.val()))
-  // Returns an unsubscribe function for use in useEffect cleanup
-  return () => off(r)
-}
-
-export function isConfigured() {
-  return missing.length === 0
+/* ── FCM: foreground message handler ── */
+export function onFCMMessage(cb) {
+  if (!isConfigured()) return () => {};
+  const { messaging } = getApp();
+  if (!messaging) return () => {};
+  return onMessage(messaging, cb);
 }
