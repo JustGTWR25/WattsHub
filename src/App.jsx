@@ -1,5 +1,9 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { dbWrite, dbMerge, dbDelete, dbListen, isConfigured, registerFCMToken, onFCMMessage } from "./firebase.js";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import {
+  dbWrite, dbMerge, dbDelete, dbListen, dbGet, isConfigured,
+  registerFCMToken, onFCMMessage,
+  signInAnon, watchAuth, isUidAllowed, requestAccess, getCurrentUid,
+} from "./firebase.js";
 
 /* ═══════════════════════════════════════════════════════════════════════════
    STYLES
@@ -453,6 +457,72 @@ select.fi{cursor:pointer;}
 .quest-desc{font-size:11px;color:var(--tx2);margin-bottom:8px;}
 .quest-track{height:5px;background:var(--s3);border-radius:3px;overflow:hidden;}
 .quest-fill{height:100%;border-radius:3px;transition:width .7s cubic-bezier(.34,1.56,.64,1);}
+
+/* ── Auth gate ── */
+.auth-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;}
+.auth-card{background:var(--s1);border:1px solid var(--b1);border-radius:var(--rl);padding:32px;max-width:440px;width:100%;text-align:center;box-shadow:var(--sh);}
+.auth-logo{font-size:32px;font-weight:900;letter-spacing:-1px;margin-bottom:6px;}
+.auth-logo span{color:var(--pu);}
+.auth-sub{color:var(--tx2);font-size:13px;margin-bottom:22px;}
+.auth-uid{font-family:var(--fm);font-size:11px;background:var(--s3);padding:10px 12px;border-radius:var(--rs);color:var(--tx2);margin-bottom:16px;word-break:break-all;user-select:all;}
+.auth-label{font-size:11px;font-weight:800;letter-spacing:.08em;color:var(--tx2);text-transform:uppercase;text-align:left;display:block;margin-bottom:6px;}
+.auth-in{width:100%;padding:10px 13px;border-radius:var(--rs);background:var(--s2);border:1px solid var(--b2);color:var(--tx1);font-size:14px;margin-bottom:14px;}
+.auth-status{font-size:12px;color:var(--tx2);margin-top:14px;}
+.auth-status.ok{color:var(--te);}
+.auth-status.err{color:var(--co);}
+
+/* ── Reminder editor (inside add/edit chore modals) ── */
+.rem-list{display:flex;flex-direction:column;gap:7px;margin-bottom:8px;}
+.rem-row{display:flex;gap:7px;align-items:center;background:var(--s2);padding:8px 10px;border-radius:var(--rs);border:1px solid var(--b1);}
+.rem-time{font-family:var(--fm);padding:5px 9px;background:var(--s3);border:1px solid var(--b2);border-radius:var(--rs);color:var(--tx1);font-size:13px;width:100px;}
+.rem-days{display:flex;gap:3px;flex:1;flex-wrap:wrap;}
+.rem-daychip{width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:4px;background:var(--s3);color:var(--tx3);font-size:10px;font-weight:700;cursor:pointer;border:1px solid var(--b1);}
+.rem-daychip.on{background:var(--pu);color:#fff;border-color:var(--pu);}
+.rem-rm{color:var(--co);background:none;border:none;cursor:pointer;font-size:14px;padding:4px 6px;}
+.rem-add{background:var(--s2);border:1px dashed var(--b2);color:var(--tx2);padding:8px;border-radius:var(--rs);cursor:pointer;font-size:12px;width:100%;}
+.rem-add:hover{background:var(--s3);color:var(--tx1);}
+
+/* ── Focus timer modal ── */
+.ft-modal{background:var(--s1);border:1px solid var(--b1);border-radius:var(--rl);padding:28px;max-width:380px;width:100%;box-shadow:var(--sh);text-align:center;}
+.ft-chore{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.09em;color:var(--tx2);margin-bottom:4px;}
+.ft-title{font-size:17px;font-weight:700;margin-bottom:20px;color:var(--tx1);}
+.ft-ring{position:relative;width:220px;height:220px;margin:0 auto 18px;}
+.ft-ring svg{transform:rotate(-90deg);width:100%;height:100%;}
+.ft-ring-bg{stroke:var(--s3);}
+.ft-ring-fg{transition:stroke-dashoffset 1s linear,stroke .3s;stroke-linecap:round;}
+.ft-time{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;}
+.ft-time-main{font-family:var(--fm);font-size:42px;font-weight:700;letter-spacing:-1px;}
+.ft-time-sub{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:var(--tx2);margin-top:4px;}
+.ft-mode-focus .ft-ring-fg{stroke:var(--pu);}
+.ft-mode-break .ft-ring-fg{stroke:var(--te);}
+.ft-mode-warn .ft-ring-fg{stroke:var(--am);}
+.ft-mode-end .ft-ring-fg{stroke:var(--co);}
+.ft-presets{display:flex;gap:6px;margin-bottom:16px;justify-content:center;flex-wrap:wrap;}
+.ft-preset{padding:6px 11px;border-radius:var(--rs);background:var(--s2);border:1px solid var(--b1);color:var(--tx2);font-size:11px;font-weight:700;cursor:pointer;}
+.ft-preset.on{background:var(--pu);border-color:var(--pu);color:#fff;}
+.ft-controls{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;}
+.ft-btn{padding:9px 18px;border-radius:var(--rs);border:none;font-weight:700;font-size:13px;cursor:pointer;}
+.ft-btn-primary{background:var(--pu);color:#fff;}
+.ft-btn-primary:hover{background:var(--pud);}
+.ft-btn-secondary{background:var(--s2);color:var(--tx1);border:1px solid var(--b2);}
+.ft-btn-secondary:hover{background:var(--s3);}
+.ft-stat{font-size:11px;color:var(--tx3);margin-top:12px;}
+.ft-launch{display:inline-flex;align-items:center;gap:4px;padding:4px 8px;border-radius:4px;background:rgba(124,111,247,.12);color:var(--pul);font-size:10px;font-weight:700;cursor:pointer;border:1px solid rgba(124,111,247,.25);}
+.ft-launch:hover{background:rgba(124,111,247,.22);}
+.km-ft-btn{flex-shrink:0;padding:5px 9px;border-radius:var(--rs);background:rgba(124,111,247,.14);color:var(--pul);border:none;font-size:11px;font-weight:700;cursor:pointer;margin-right:6px;}
+.km-ft-btn:hover{background:rgba(124,111,247,.25);}
+
+/* ── Devices admin ── */
+.dev-row{display:flex;align-items:center;gap:10px;padding:11px 12px;background:var(--s2);border-radius:var(--rs);border:1px solid var(--b1);margin-bottom:7px;}
+.dev-info{flex:1;min-width:0;}
+.dev-label{font-size:13px;font-weight:700;color:var(--tx1);}
+.dev-uid{font-family:var(--fm);font-size:10px;color:var(--tx3);margin-top:2px;word-break:break-all;}
+.dev-meta{font-size:10px;color:var(--tx2);margin-top:3px;}
+.dev-badge{display:inline-block;padding:2px 7px;border-radius:3px;font-size:9px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;}
+.dev-badge.admin{background:rgba(124,111,247,.14);color:var(--pul);}
+.dev-badge.member{background:rgba(45,212,167,.14);color:var(--te);}
+.dev-badge.pending{background:rgba(245,166,35,.14);color:var(--am);}
+.dev-badge.self{background:rgba(74,158,255,.14);color:var(--bl);margin-left:5px;}
 `;
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -732,6 +802,7 @@ function AddChoreModal({cf,setCf,kids,parents,onClose,onSave,toggleDay}){
     </div></div>}
     <div className="fg"><div className="swrow" style={{padding:"5px 0"}}><label className="fl" style={{marginBottom:0}}>Requires approval</label>
       <label className="sw"><input type="checkbox" checked={cf.requiresApproval} onChange={e=>setCf(f=>({...f,requiresApproval:e.target.checked}))}/><div className="sw-tr"/><div className="sw-th"/></label></div></div>
+    <ReminderEditor reminders={cf.reminders||[]} setReminders={rs=>setCf(f=>({...f,reminders:rs}))}/>
     {xp>0&&<div className="fhint" style={{marginBottom:0}}>Earns: {xp} XP per completion</div>}
     <div className="fax"><button className="btn btn-g" onClick={onClose}>Cancel</button>
       <button className="btn btn-p" disabled={!cf.title.trim()||(!cf.upForGrabs&&!cf.assignedTo.length)||(isFixed&&!cf.scheduleDays.length)} onClick={onSave}>Add chore</button></div>
@@ -811,6 +882,7 @@ function EditChoreModal({editChore,setEditChore,kids,parents,onSave,onDelete}){
     </div></div>}
     <div className="fg"><div className="swrow" style={{padding:"5px 0"}}><label className="fl" style={{marginBottom:0}}>Requires approval</label>
       <label className="sw"><input type="checkbox" checked={ec.requiresApproval} onChange={e=>setEc(p=>({...p,requiresApproval:e.target.checked}))}/><div className="sw-tr"/><div className="sw-th"/></label></div></div>
+    <ReminderEditor reminders={ec.reminders||[]} setReminders={rs=>setEc(p=>({...p,reminders:rs}))}/>
     <div className="fax">
       <button className="btn btn-no btn-sm" onClick={onDelete}>Delete</button>
       <div style={{flex:1}}/>
@@ -822,6 +894,8 @@ function EditChoreModal({editChore,setEditChore,kids,parents,onSave,onDelete}){
 
 function EditKidModal({editKid,setEditKid,onSave}){
   if(!editKid)return null;
+  const fb=editKid.focusBonus||{enabled:false,xp25:2,xp45:5,dailyCap:3};
+  const setFb=patch=>setEditKid(p=>({...p,focusBonus:{...fb,...patch}}));
   return <div className="mbd" onClick={()=>setEditKid(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
     <div className="mt">Edit profile</div>
     <div className="fg"><label className="fl">Name</label>
@@ -830,6 +904,28 @@ function EditKidModal({editKid,setEditKid,onSave}){
     <div className="f2">
       <div className="fg"><label className="fl">Age</label><input className="fi" type="number" value={editKid.age} onChange={e=>setEditKid(p=>({...p,age:parseInt(e.target.value)||p.age}))}/></div>
       <div className="fg"><label className="fl">Initials</label><input className="fi" maxLength={2} value={editKid.initials} onChange={e=>setEditKid(p=>({...p,initials:e.target.value.toUpperCase()}))}/></div>
+    </div>
+    <div className="fg">
+      <div className="swrow" style={{padding:"5px 0"}}>
+        <div>
+          <label className="fl" style={{marginBottom:2}}>Focus session XP bonus</label>
+          <div className="fhint" style={{marginTop:0}}>Reward completed focus sessions with bonus XP.</div>
+        </div>
+        <label className="sw"><input type="checkbox" checked={fb.enabled||false}
+          onChange={e=>setFb({enabled:e.target.checked})}/>
+          <div className="sw-tr"/><div className="sw-th"/></label>
+      </div>
+      {fb.enabled&&<div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginTop:10}}>
+        <div><label className="fl">25m XP</label>
+          <input className="fi" type="number" min={0} max={20} value={fb.xp25}
+            onChange={e=>setFb({xp25:parseInt(e.target.value)||0})}/></div>
+        <div><label className="fl">45m XP</label>
+          <input className="fi" type="number" min={0} max={30} value={fb.xp45}
+            onChange={e=>setFb({xp45:parseInt(e.target.value)||0})}/></div>
+        <div><label className="fl">Daily cap</label>
+          <input className="fi" type="number" min={1} max={10} value={fb.dailyCap}
+            onChange={e=>setFb({dailyCap:parseInt(e.target.value)||1})}/></div>
+      </div>}
     </div>
     <div className="fax"><button className="btn btn-g" onClick={()=>setEditKid(null)}>Cancel</button><button className="btn btn-p" onClick={onSave}>Save</button></div>
   </div></div>;
@@ -1135,6 +1231,254 @@ function BonusModal({kids,bonusKid,setBonusKid,bonusType,setBonusType,bonusAmt,s
   </div></div>;
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   AUTH GATE — sign in + request access flow
+═══════════════════════════════════════════════════════════════════════════ */
+function AuthGate({status,uid,label,setLabel,onRequest,onRetry}){
+  // status: 'signing-in' | 'checking' | 'needs-request' | 'request-sent' | 'denied' | 'error'
+  return <div className="auth-wrap"><div className="auth-card">
+    <div className="auth-logo"><span>Watts</span>Hub</div>
+    <div className="auth-sub">Family productivity, secured.</div>
+
+    {status==='signing-in'&&<>
+      <div className="auth-status">Signing in…</div>
+    </>}
+
+    {status==='checking'&&<>
+      <div className="auth-uid">{uid||'—'}</div>
+      <div className="auth-status">Checking access…</div>
+    </>}
+
+    {status==='needs-request'&&<>
+      <div style={{fontSize:13,color:'var(--tx2)',marginBottom:14,textAlign:'left'}}>
+        This device isn't on the allowlist yet. Name it and send a request — a parent can approve it from the Devices screen.
+      </div>
+      <label className="auth-label">Device name</label>
+      <input className="auth-in" autoFocus value={label} placeholder="e.g. Jordan's iPad"
+        onChange={e=>setLabel(e.target.value)}/>
+      <label className="auth-label">Your device ID (copy if you're setting up the first device)</label>
+      <div className="auth-uid">{uid}</div>
+      <button className="btn btn-p" style={{width:'100%'}} disabled={!label.trim()} onClick={onRequest}>
+        Request access
+      </button>
+    </>}
+
+    {status==='request-sent'&&<>
+      <div className="auth-uid">{uid}</div>
+      <div className="auth-status ok">✓ Request sent. Ask a parent to approve this device.</div>
+      <button className="btn btn-g btn-sm" style={{marginTop:14}} onClick={onRetry}>Check again</button>
+    </>}
+
+    {status==='denied'&&<>
+      <div className="auth-uid">{uid}</div>
+      <div className="auth-status err">Access denied. Ask a parent to approve this device ID.</div>
+      <button className="btn btn-g btn-sm" style={{marginTop:14}} onClick={onRetry}>Retry</button>
+    </>}
+
+    {status==='error'&&<>
+      <div className="auth-status err">Couldn't connect to WattsHub. Check your internet connection.</div>
+      <button className="btn btn-g btn-sm" style={{marginTop:14}} onClick={onRetry}>Retry</button>
+    </>}
+  </div></div>;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   REMINDER EDITOR — used inside AddChoreModal and EditChoreModal
+═══════════════════════════════════════════════════════════════════════════ */
+function ReminderEditor({reminders,setReminders}){
+  const rs=reminders||[];
+  const addRow=()=>setReminders([...rs,{time:"16:00",daysOfWeek:[]}]);
+  const updateRow=(i,patch)=>setReminders(rs.map((r,idx)=>idx===i?{...r,...patch}:r));
+  const removeRow=i=>setReminders(rs.filter((_,idx)=>idx!==i));
+  const toggleRowDay=(i,dow)=>{
+    const r=rs[i];
+    const days=r.daysOfWeek||[];
+    const next=days.includes(dow)?days.filter(d=>d!==dow):[...days,dow].sort();
+    updateRow(i,{daysOfWeek:next});
+  };
+  return <div className="fg">
+    <label className="fl">Reminders {rs.length>0&&<span style={{color:'var(--tx3)',fontWeight:500}}>({rs.length})</span>}</label>
+    <div className="fhint" style={{marginBottom:8}}>Push notifications sent to assigned kids at these times.</div>
+    {rs.length>0&&<div className="rem-list">
+      {rs.map((r,i)=><div key={i} className="rem-row">
+        <input type="time" className="rem-time" value={r.time||"16:00"}
+          onChange={e=>updateRow(i,{time:e.target.value})}/>
+        <div className="rem-days">
+          {DAY_NAMES.map((n,dow)=><div key={dow}
+            className={`rem-daychip${(r.daysOfWeek||[]).includes(dow)?' on':''}${!r.daysOfWeek?.length?' on':''}`}
+            title={(!r.daysOfWeek?.length)?'Every day':n}
+            onClick={()=>toggleRowDay(i,dow)}>{n.slice(0,1)}</div>)}
+        </div>
+        <button className="rem-rm" onClick={()=>removeRow(i)} title="Remove">✕</button>
+      </div>)}
+    </div>}
+    <button className="rem-add" onClick={addRow}>+ Add reminder time</button>
+  </div>;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   FOCUS TIMER MODAL — Pomodoro-style with preset profiles
+═══════════════════════════════════════════════════════════════════════════ */
+const FOCUS_PRESETS=[
+  {id:"quick",    label:"Quick",    focus:15,brk:3 },
+  {id:"standard", label:"Standard", focus:25,brk:5 },
+  {id:"deep",     label:"Deep",     focus:45,brk:10},
+];
+
+function playBeep(freq=880,dur=200){
+  try{
+    const ctx=new (window.AudioContext||window.webkitAudioContext)();
+    const osc=ctx.createOscillator();
+    const gain=ctx.createGain();
+    osc.frequency.value=freq;osc.type='sine';
+    gain.gain.value=.25;
+    osc.connect(gain);gain.connect(ctx.destination);
+    osc.start();
+    setTimeout(()=>{osc.stop();ctx.close();},dur);
+  }catch(e){/* ignore */}
+}
+
+function FocusTimerModal({chore,kidMode,kidId,onClose,onComplete,toast}){
+  const[presetId,setPresetId]=useState('standard');
+  const preset=FOCUS_PRESETS.find(p=>p.id===presetId)||FOCUS_PRESETS[1];
+
+  // Phase: 'idle' | 'focus' | 'break' | 'done'
+  const[phase,setPhase]=useState('idle');
+  const[running,setRunning]=useState(false);
+  const[endsAt,setEndsAt]=useState(null);       // ms epoch when current phase ends
+  const[remainMs,setRemainMs]=useState(preset.focus*60*1000);
+  const[sessionsCompleted,setSessionsCompleted]=useState(0);
+  const tickRef=useRef(null);
+
+  // Recompute remaining on every tick + on visibility change, using wall clock.
+  const tick=useCallback(()=>{
+    if(!endsAt){return;}
+    const r=Math.max(0,endsAt-Date.now());
+    setRemainMs(r);
+    if(r===0){
+      // Phase transition.
+      if(phase==='focus'){
+        playBeep(660,300);setTimeout(()=>playBeep(880,300),350);
+        setSessionsCompleted(s=>s+1);
+        onComplete&&onComplete({duration:preset.focus,choreId:chore?.id||null,kidId:kidId||null});
+        // Auto-start break
+        const breakEnd=Date.now()+preset.brk*60*1000;
+        setPhase('break');setEndsAt(breakEnd);setRemainMs(preset.brk*60*1000);
+        try{if("Notification" in window&&Notification.permission==='granted'){
+          new Notification('☕ Break time',{body:`${preset.brk} minute break. Back at it soon.`});
+        }}catch(e){}
+      }else if(phase==='break'){
+        playBeep(440,250);setTimeout(()=>playBeep(660,250),300);
+        setPhase('done');setRunning(false);setEndsAt(null);
+        try{if("Notification" in window&&Notification.permission==='granted'){
+          new Notification('🎯 Break over',{body:chore?`Back to: ${chore.title}`:'Back to work.'});
+        }}catch(e){}
+      }
+    }
+  },[endsAt,phase,preset,chore,kidId,onComplete]);
+
+  useEffect(()=>{
+    if(!running){if(tickRef.current){clearInterval(tickRef.current);tickRef.current=null;}return;}
+    tickRef.current=setInterval(tick,1000);
+    const vis=()=>{if(document.visibilityState==='visible')tick();};
+    document.addEventListener('visibilitychange',vis);
+    return()=>{
+      if(tickRef.current)clearInterval(tickRef.current);
+      document.removeEventListener('visibilitychange',vis);
+    };
+  },[running,tick]);
+
+  const startFocus=()=>{
+    const end=Date.now()+preset.focus*60*1000;
+    setPhase('focus');setEndsAt(end);setRemainMs(preset.focus*60*1000);setRunning(true);
+    try{if("Notification" in window&&Notification.permission==='default'){Notification.requestPermission();}}catch(e){}
+  };
+  const pause=()=>{
+    if(!running)return;
+    setRunning(false);
+    // Freeze remaining time into state; endsAt will be recomputed on resume.
+    setEndsAt(null);
+  };
+  const resume=()=>{
+    const end=Date.now()+remainMs;
+    setEndsAt(end);setRunning(true);
+  };
+  const skipToBreak=()=>{
+    if(phase!=='focus')return;
+    // Count it as complete if more than half elapsed.
+    const elapsed=preset.focus*60*1000-remainMs;
+    if(elapsed>=preset.focus*60*1000/2){
+      setSessionsCompleted(s=>s+1);
+      onComplete&&onComplete({duration:preset.focus,choreId:chore?.id||null,kidId:kidId||null});
+    }
+    const end=Date.now()+preset.brk*60*1000;
+    setPhase('break');setEndsAt(end);setRemainMs(preset.brk*60*1000);setRunning(true);
+  };
+  const reset=()=>{
+    setRunning(false);setPhase('idle');setEndsAt(null);
+    setRemainMs(preset.focus*60*1000);
+  };
+  const changePreset=id=>{
+    if(running)return;
+    setPresetId(id);
+    const p=FOCUS_PRESETS.find(x=>x.id===id);
+    setRemainMs(p.focus*60*1000);
+  };
+
+  const mins=Math.floor(remainMs/60000);
+  const secs=Math.floor((remainMs%60000)/1000);
+  const totalSec=(phase==='break'?preset.brk:preset.focus)*60;
+  const elapsedSec=totalSec-Math.ceil(remainMs/1000);
+  const pct=Math.min(1,Math.max(0,elapsedSec/totalSec));
+  const circ=2*Math.PI*90;   // r=90
+  const offset=circ*(1-pct);
+  const modeClass=phase==='break'?'ft-mode-break':(remainMs<=60000&&phase==='focus'?'ft-mode-warn':'ft-mode-focus');
+
+  return <div className="mbd" onClick={onClose}>
+    <div className={`ft-modal ${modeClass}`} onClick={e=>e.stopPropagation()}>
+      {chore&&<div className="ft-chore">Focused on</div>}
+      {chore&&<div className="ft-title">{chore.title}</div>}
+      {!chore&&<div className="ft-title">Focus session</div>}
+
+      <div className="ft-presets">
+        {FOCUS_PRESETS.map(p=><button key={p.id}
+          className={`ft-preset${presetId===p.id?' on':''}`}
+          onClick={()=>changePreset(p.id)} disabled={running}>
+          {p.label} · {p.focus}/{p.brk}
+        </button>)}
+      </div>
+
+      <div className="ft-ring">
+        <svg viewBox="0 0 200 200">
+          <circle className="ft-ring-bg" cx="100" cy="100" r="90" fill="none" strokeWidth="10"/>
+          <circle className="ft-ring-fg" cx="100" cy="100" r="90" fill="none" strokeWidth="10"
+            strokeDasharray={circ} strokeDashoffset={offset}/>
+        </svg>
+        <div className="ft-time">
+          <div className="ft-time-main">{String(mins).padStart(2,'0')}:{String(secs).padStart(2,'0')}</div>
+          <div className="ft-time-sub">
+            {phase==='idle'&&'Ready'}
+            {phase==='focus'&&'Focus'}
+            {phase==='break'&&'Break'}
+            {phase==='done'&&'Done'}
+          </div>
+        </div>
+      </div>
+
+      <div className="ft-controls">
+        {phase==='idle'&&<button className="ft-btn ft-btn-primary" onClick={startFocus}>▶ Start {preset.focus}m focus</button>}
+        {running&&<button className="ft-btn ft-btn-secondary" onClick={pause}>⏸ Pause</button>}
+        {!running&&phase==='focus'&&remainMs<preset.focus*60*1000&&<button className="ft-btn ft-btn-primary" onClick={resume}>▶ Resume</button>}
+        {phase==='focus'&&<button className="ft-btn ft-btn-secondary" onClick={skipToBreak}>Skip to break</button>}
+        {phase!=='idle'&&<button className="ft-btn ft-btn-secondary" onClick={reset}>Reset</button>}
+        <button className="ft-btn ft-btn-secondary" onClick={onClose}>Close</button>
+      </div>
+
+      {sessionsCompleted>0&&<div className="ft-stat">✓ {sessionsCompleted} focus session{sessionsCompleted>1?'s':''} this sitting</div>}
+    </div>
+  </div>;
+}
+
 export default function WattsHub(){
   const{ready,write,merge,listen,del}=useFB();
 
@@ -1194,8 +1538,86 @@ export default function WattsHub(){
   const[pinStep,setPinStep]=useState(1);
   const[pinFirst,setPinFirst]=useState('');
 
+  /* ── Auth / allowlist state ───────────────────────────────────── */
+  const[authStatus,setAuthStatus]=useState('signing-in'); // signing-in|checking|needs-request|request-sent|denied|error|authorized
+  const[authUid,setAuthUid]=useState(null);
+  const[deviceLabel,setDeviceLabel]=useState('');
+  const[allowedUids,setAllowedUids]=useState({});
+  const[pendingAccess,setPendingAccess]=useState({});
+
+  /* ── Focus timer + reminders state ────────────────────────────── */
+  const[focusTarget,setFocusTarget]=useState(null);  // {chore,kidId} or null = standalone
+  const[focusOpen,setFocusOpen]=useState(false);
+
+  const authorized=authStatus==='authorized';
+
+  /* ── Step 1: sign in anonymously on mount ─────────────────────── */
   useEffect(()=>{
-    if(!ready)return;
+    if(!ready){setAuthStatus('error');return;}
+    let cancelled=false;
+    (async()=>{
+      try{
+        await signInAnon();
+      }catch(e){
+        console.warn('Sign-in failed',e);
+        if(!cancelled)setAuthStatus('error');
+      }
+    })();
+    const unwatch=watchAuth(uid=>{
+      if(cancelled)return;
+      if(!uid){setAuthStatus('signing-in');setAuthUid(null);return;}
+      setAuthUid(uid);
+      setAuthStatus('checking');
+    });
+    return()=>{cancelled=true;unwatch&&unwatch();};
+  },[ready]);
+
+  /* ── Step 2: once we have a uid, check allowlist ──────────────── */
+  useEffect(()=>{
+    if(authStatus!=='checking'||!authUid)return;
+    let cancelled=false;
+    (async()=>{
+      try{
+        const allowed=await isUidAllowed(authUid);
+        if(cancelled)return;
+        if(allowed){
+          setAuthStatus('authorized');
+        }else{
+          // Check if a request is already pending.
+          try{
+            const myPending=await dbGet(`wh/pendingAccess/${authUid}`);
+            if(cancelled)return;
+            if(myPending){setAuthStatus('request-sent');}
+            else{setAuthStatus('needs-request');}
+          }catch(e){
+            // Can't read pending either — likely no network, or rules reject.
+            setAuthStatus('needs-request');
+          }
+        }
+      }catch(e){
+        if(!cancelled)setAuthStatus('error');
+      }
+    })();
+    return()=>{cancelled=true;};
+  },[authStatus,authUid]);
+
+  const submitAccessRequest=async()=>{
+    if(!authUid||!deviceLabel.trim())return;
+    try{
+      await requestAccess(authUid,deviceLabel.trim());
+      setAuthStatus('request-sent');
+    }catch(e){
+      console.warn('Access request failed',e);
+      setAuthStatus('error');
+    }
+  };
+  const retryAuth=async()=>{
+    if(!authUid){setAuthStatus('signing-in');return;}
+    setAuthStatus('checking');
+  };
+
+  useEffect(()=>{
+    if(!ready||!authorized)return;
     const u=[
       listen("wh/kids",     v=>{if(v)setKids(Object.values(v));}),
       listen("wh/parents",  v=>{if(v)setParents(Object.values(v));}),
@@ -1212,12 +1634,14 @@ export default function WattsHub(){
       listen("wh/purchases",v=>{if(v)setPurchases(Object.values(v));}),
       listen("wh/txlog",    v=>{if(v)setTxLog(Object.values(v));}),
       listen("wh/grabs",    v=>{setGrabs(v||{});}),
+      listen("wh/allowedUids", v=>{setAllowedUids(v||{});}),
+      listen("wh/pendingAccess",v=>{setPendingAccess(v||{});}),
     ];
     return()=>u.forEach(f=>f());
-  },[ready,listen]);
+  },[ready,authorized,listen]);
 
   useEffect(()=>{
-    if(!kids.length)return;
+    if(!kids.length||!authorized)return;
     const todayKey=today();
     const reset=checkStreakReset(kids,todayKey);
     reset.forEach((k,i)=>{
@@ -1226,10 +1650,10 @@ export default function WattsHub(){
         if(ready)merge(`wh/kids/${k.id}`,{streak:0});
       }
     });
-  },[ready]); // eslint-disable-line
+  },[ready,authorized]); // eslint-disable-line
 
   useEffect(()=>{
-    if(!ready)return;
+    if(!ready||!authorized)return;
     const unsub=listen('wh/kids',v=>{
       if(!v){
         KIDS0.forEach(k=>write(`wh/kids/${k.id}`,k));
@@ -1238,20 +1662,69 @@ export default function WattsHub(){
       }
       unsub();
     });
-  },[ready]); // eslint-disable-line
+  },[ready,authorized]); // eslint-disable-line
 
   /* ── FCM: register token when entering parent or kid mode ── */
   useEffect(()=>{
-    if(!ready||screen!=='app')return;
+    if(!ready||!authorized||screen!=='app')return;
     const userId=activeKid||'parent_default';
     registerFCMToken(userId).catch(()=>{});
-    // Handle foreground push messages (show as toast)
     const unsub=onFCMMessage(payload=>{
       const{title,body}=payload.notification||{};
       if(title||body)toast(`${title||''}${body?' — '+body:''}`);
     });
     return unsub;
-  },[ready,screen,activeKid]); // eslint-disable-line
+  },[ready,authorized,screen,activeKid]); // eslint-disable-line
+
+  /* ── Service-worker action handling (snooze/done from reminders) ──
+     The SW posts {whAction, tag} when a user taps a notification action.
+     Tag format for reminders: "remind-{choreId}-{kidId}-{dateKey}"
+  ── */
+  useEffect(()=>{
+    if(!ready||!authorized)return;
+    const handler=async(evt)=>{
+      const msg=evt.data||{};
+      if(!msg.whAction||!msg.tag)return;
+      if(msg.tag.startsWith('remind-')){
+        // Parse tag
+        const parts=msg.tag.split('-');
+        if(parts.length<4)return;
+        const choreId=parts[1];
+        const kidId=parts[2];
+        if(msg.whAction==='snooze15'){
+          const snoozedUntil=Date.now()+15*60*1000;
+          await merge(`wh/snoozes/${kidId}/${choreId}`,{snoozedUntil,setAt:Date.now()});
+          toast(`😴 Snoozed for 15 min`);
+        }else if(msg.whAction==='done'){
+          toast(`Jump in on your chore below!`);
+        }
+      }
+    };
+    navigator.serviceWorker?.addEventListener('message',handler);
+    return()=>navigator.serviceWorker?.removeEventListener('message',handler);
+  },[ready,authorized,merge,toast]);
+
+  /* ── URL action handler (when SW opens a new tab with ?wh_action=...) ── */
+  useEffect(()=>{
+    if(!ready||!authorized)return;
+    const url=new URL(window.location.href);
+    const action=url.searchParams.get('wh_action');
+    const tag=url.searchParams.get('tag');
+    if(!action||!tag)return;
+    // Clean the URL so a refresh doesn't re-trigger.
+    url.searchParams.delete('wh_action');
+    url.searchParams.delete('tag');
+    window.history.replaceState({},'',url.toString());
+    if(tag.startsWith('remind-')&&action==='snooze15'){
+      const parts=tag.split('-');
+      if(parts.length>=4){
+        const choreId=parts[1];const kidId=parts[2];
+        const snoozedUntil=Date.now()+15*60*1000;
+        merge(`wh/snoozes/${kidId}/${choreId}`,{snoozedUntil,setAt:Date.now()});
+        toast(`😴 Snoozed for 15 min`);
+      }
+    }
+  },[ready,authorized,merge,toast]);
 
   /* ── Kid-mode approval watcher ──
      Polls comps changes via the existing Firebase listener.
@@ -1511,6 +1984,82 @@ export default function WattsHub(){
     if(ready)await write(`wh/comps/${dk}/${ck}`,comp);
     toast(note?`Denied: "${note}"`:"Task denied.");
     setDenyTarget(null);
+  }
+
+  /* ── Focus session completion ──
+     Logs every completed focus session to wh/focusSessions and, if the
+     kid has focusBonus enabled, credits the configured XP bonus.
+  ── */
+  async function onFocusSessionComplete({duration,choreId,kidId}){
+    if(!ready)return;
+    const sid=`fs_${Date.now()}_${kidId||'parent'}`;
+    const entry={id:sid,kidId:kidId||null,choreId:choreId||null,duration,completedAt:Date.now()};
+    await write(`wh/focusSessions/${sid}`,entry);
+
+    // Only kids (not parents) can earn focus XP bonuses.
+    if(!kidId)return;
+    const kid=kidById(kidId);
+    if(!kid?.focusBonus?.enabled)return;
+
+    // Daily cap
+    const todayKey=today();
+    const dailyCap=kid.focusBonus.dailyCap||3;
+    const todaySessionsSnap=await (async()=>{
+      try{
+        const all=await dbGet('wh/focusSessions');
+        if(!all)return 0;
+        const startOfDay=new Date();startOfDay.setHours(0,0,0,0);
+        return Object.values(all).filter(f=>f.kidId===kidId&&f.completedAt>=startOfDay.getTime()).length;
+      }catch(e){return 0;}
+    })();
+    if(todaySessionsSnap>dailyCap){
+      toast(`🎯 Focus session complete! (daily XP cap reached)`);
+      return;
+    }
+
+    // Award bonus XP based on duration
+    const xp25=kid.focusBonus.xp25||2;
+    const xp45=kid.focusBonus.xp45||5;
+    const bonusXp=duration>=45?xp45:duration>=25?xp25:Math.max(1,Math.round(xp25*(duration/25)));
+    const newXp=kid.xp+bonusXp;
+    const wk=weekKey(todayKey),mo=monthKey(todayKey);
+    const newWkXp=getKidPeriodXp(kidId,wk)+bonusXp;
+    const newMoXp=getKidPeriodXp(kidId,mo)+bonusXp;
+    const txEntry={id:"tx"+Date.now()+"f",kidId,type:"focus_bonus",xp:bonusXp,cents:0,desc:`Focus session (${duration}m) 🎯`,ts:Date.now()};
+
+    setKids(prev=>prev.map(k=>k.id===kidId?{...k,xp:newXp}:k));
+    setPeriodXp(prev=>({...prev,[wk]:{...(prev[wk]||{}),[kidId]:newWkXp},[mo]:{...(prev[mo]||{}),[kidId]:newMoXp}}));
+    setTxLog(prev=>[txEntry,...prev].slice(0,300));
+    await merge(`wh/kids/${kidId}`,{xp:newXp});
+    await merge(`wh/periodXp/${wk}`,{[kidId]:newWkXp});
+    await merge(`wh/periodXp/${mo}`,{[kidId]:newMoXp});
+    await write(`wh/txlog/${txEntry.id}`,txEntry);
+    toast(`🎯 Focus complete! +${bonusXp} XP bonus`);
+  }
+
+  /* ── Device admin (parent-only, from the Devices view) ── */
+  async function approveDevice(uid,label,role='member'){
+    if(!ready)return;
+    await write(`wh/allowedUids/${uid}`,{
+      uid,label:label||'Unnamed device',role,
+      approvedBy:authUid,approvedAt:Date.now(),
+    });
+    await dbDelete(`wh/pendingAccess/${uid}`);
+    toast(`✓ Approved ${label||'device'}`);
+  }
+  async function denyDevice(uid){
+    if(!ready)return;
+    await dbDelete(`wh/pendingAccess/${uid}`);
+    toast(`✕ Denied`);
+  }
+  async function revokeDevice(uid){
+    if(!ready)return;
+    if(uid===authUid){
+      toast('⚠️ Cannot revoke this device (you are signed in on it).');
+      return;
+    }
+    await dbDelete(`wh/allowedUids/${uid}`);
+    toast('Device access revoked.');
   }
 
   async function convertXP(kidId,xpAmount){
@@ -1879,6 +2428,8 @@ export default function WattsHub(){
               {sLabel&&<span className="km-rp" style={{background:"rgba(255,255,255,.05)",color:"var(--tx2)"}}>{sLabel}</span>}
             </div>
           </div>
+          {!cardDone&&!cardPend&&<button className="km-ft-btn" title="Start a focus timer"
+            onClick={()=>{setFocusTarget({chore,kidId:activeKid});setFocusOpen(true);}}>⏱ Focus</button>}
           <button className={`km-ck${cardDone?" done":cardPend?" pend":""}`}
             onClick={()=>{if(!cardDone&&!cardPend)completeChore(chore.id,activeKid,viewDk);}}>
             {cardDone?"✓":cardPend?"⏳":""}
@@ -1912,6 +2463,11 @@ export default function WattsHub(){
         )}
         {chore.requiresApproval&&!cardDone&&!cardPend&&<div style={{fontSize:10,color:"var(--tx3)",marginBottom:7}}>Requires approval</div>}
         <div className="ca">
+          {!cardDone&&!cardPend&&<button className="ft-launch" title="Start a focus timer"
+            onClick={()=>{
+              const kid=activeKid||(assignedTo.length===1?assignedTo[0]:null);
+              setFocusTarget({chore,kidId:kid});setFocusOpen(true);
+            }}>⏱ Focus</button>}
           {activeKid&&!cardDone&&!cardPend&&<button className="mkb" onClick={()=>completeChore(chore.id,activeKid,viewDk)}>✓ {past?"Mark done (75%)":"Mark complete"}</button>}
           {activeKid&&cardPend&&<button className="mkb pend">⏳ Awaiting approval</button>}
           {activeKid&&cardDone&&<button className="mkb done">✓ Done</button>}
@@ -2155,6 +2711,69 @@ export default function WattsHub(){
   }
 
   /* ══════════════════════════════════════════════════════════════════════
+     DEVICES VIEW — allowlist management + pending requests
+  ═══════════════════════════════════════════════════════════════════════ */
+  function DevicesView({authUid,allowedUids,pendingAccess,onApprove,onDeny,onRevoke}){
+    const pendingEntries=Object.entries(pendingAccess||{});
+    const allowedEntries=Object.entries(allowedUids||{});
+    const [draftLabels,setDraftLabels]=useState({});
+    const [draftRoles,setDraftRoles]=useState({});
+    return <>
+      <div className="settings-section">
+        <div className="settings-section-title">Pending requests ({pendingEntries.length})</div>
+        {pendingEntries.length===0&&<div className="fhint" style={{padding:"10px 2px"}}>No pending access requests.</div>}
+        {pendingEntries.map(([uid,p])=>{
+          const label=draftLabels[uid]??p.label??'';
+          const role=draftRoles[uid]||'member';
+          return <div key={uid} className="dev-row">
+            <div className="dev-info">
+              <div className="dev-label"><span className="dev-badge pending">Pending</span></div>
+              <div className="dev-uid">{uid}</div>
+              <div className="dev-meta">{p.userAgent?.slice(0,80)}{p.userAgent?.length>80?'…':''}</div>
+              <div style={{display:'flex',gap:6,marginTop:8,alignItems:'center',flexWrap:'wrap'}}>
+                <input className="fi" style={{flex:'1 1 180px',fontSize:12,padding:'5px 9px'}}
+                  value={label} placeholder="Device label"
+                  onChange={e=>setDraftLabels(d=>({...d,[uid]:e.target.value}))}/>
+                <select className="fi" style={{flex:'0 0 100px',fontSize:12,padding:'5px 9px'}}
+                  value={role} onChange={e=>setDraftRoles(d=>({...d,[uid]:e.target.value}))}>
+                  <option value="member">Member</option>
+                  <option value="admin">Admin</option>
+                </select>
+                <button className="btn btn-ok btn-sm" onClick={()=>onApprove(uid,label||p.label||'Unnamed',role)}>✓ Approve</button>
+                <button className="btn btn-no btn-sm" onClick={()=>onDeny(uid)}>✕ Deny</button>
+              </div>
+            </div>
+          </div>;
+        })}
+      </div>
+
+      <div className="settings-section" style={{marginTop:18}}>
+        <div className="settings-section-title">Approved devices ({allowedEntries.length})</div>
+        {allowedEntries.length===0&&<div className="fhint" style={{padding:"10px 2px"}}>No devices yet. You must add at least one admin device in the Firebase console to bootstrap.</div>}
+        {allowedEntries.map(([uid,a])=>(
+          <div key={uid} className="dev-row">
+            <div className="dev-info">
+              <div className="dev-label">
+                {a.label||'Unnamed device'}
+                <span className={`dev-badge ${a.role==='admin'?'admin':'member'}`} style={{marginLeft:7}}>{a.role||'member'}</span>
+                {uid===authUid&&<span className="dev-badge self">This device</span>}
+              </div>
+              <div className="dev-uid">{uid}</div>
+              <div className="dev-meta">Approved {a.approvedAt?new Date(a.approvedAt).toLocaleDateString():'—'}</div>
+            </div>
+            {uid!==authUid&&<button className="btn btn-no btn-sm" onClick={()=>{if(confirm(`Revoke access for "${a.label||'this device'}"?`))onRevoke(uid);}}>Revoke</button>}
+          </div>
+        ))}
+      </div>
+
+      <div className="fhint" style={{marginTop:18,padding:"12px",background:"var(--s2)",borderRadius:"var(--rs)",border:"1px solid var(--b1)"}}>
+        <strong style={{color:'var(--tx1)'}}>Your device ID:</strong>
+        <div className="auth-uid" style={{marginTop:6,marginBottom:0}}>{authUid||'—'}</div>
+      </div>
+    </>;
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════
      SETTINGS VIEW — BATCH 5
   ═══════════════════════════════════════════════════════════════════════ */
   function SettingsView(){
@@ -2196,6 +2815,14 @@ export default function WattsHub(){
               <div className="settings-row-sub">{isPINSet()?"PIN is set — required to access parent mode":"No PIN set — anyone can access parent mode"}</div>
             </div>
             <button className="btn btn-g btn-sm" onClick={()=>setShowChangePIN(true)}>{isPINSet()?"Change PIN":"Set PIN"}</button>
+          </div>
+          <div className="settings-row">
+            <span style={{fontSize:20}}>📱</span>
+            <div className="settings-row-info">
+              <div className="settings-row-title">Approved devices</div>
+              <div className="settings-row-sub">{Object.keys(allowedUids||{}).length} approved · {Object.keys(pendingAccess||{}).length} pending</div>
+            </div>
+            <button className="btn btn-g btn-sm" onClick={()=>setView('devices')}>Manage</button>
           </div>
         </div>
 
@@ -2614,6 +3241,20 @@ export default function WattsHub(){
     );
   }
 
+  /* ─── Auth gate (blocks everything until UID is allowlisted) ─── */
+  if(!authorized){
+    return(<>
+      <style>{CSS}</style>
+      <AuthGate
+        status={authStatus}
+        uid={authUid}
+        label={deviceLabel}
+        setLabel={setDeviceLabel}
+        onRequest={submitAccessRequest}
+        onRetry={retryAuth}/>
+    </>);
+  }
+
   /* ─── Profile picker / PIN routing ── */
   if(screen==='picker')return(<><style>{CSS}</style><ProfilePicker kids={kids} enterKidMode={enterKidMode} enterParentMode={enterParentMode} isPINSet={isPINSet}/></>);
   if(screen==='pin')return(<><style>{CSS}</style><PINScreen pinEntry={pinEntry} pinError={pinError} pinMode={pinMode} pinStep={pinStep} handlePINKey={handlePINKey} onBack={()=>{setPinEntry('');setScreen('picker');}}/></>);
@@ -2642,6 +3283,13 @@ export default function WattsHub(){
           </div>
         </div>}
         <KidMode/>
+        {focusOpen&&<FocusTimerModal
+          chore={focusTarget?.chore||null}
+          kidMode={true}
+          kidId={focusTarget?.kidId||activeKid}
+          onClose={()=>{setFocusOpen(false);setFocusTarget(null);}}
+          onComplete={onFocusSessionComplete}
+          toast={toast}/>}
         <button onClick={()=>setScreen('picker')} style={{position:"fixed",bottom:20,right:20,background:"var(--s2)",border:"1px solid var(--b2)",borderRadius:"var(--rs)",padding:"8px 14px",fontSize:12,fontWeight:700,color:"var(--tx2)",cursor:"pointer",fontFamily:"var(--f)"}}>← Switch profile</button>
       </>
     );
@@ -2653,6 +3301,7 @@ export default function WattsHub(){
     store:{t:"Family Store",s:"10 XP = $1.00"},
     money:{t:"Money",s:activeKid?`${kidById(activeKid)?.name}'s balance`:"All balances"},
     activity:{t:"Activity",s:"Completed tasks"},
+    devices:{t:"Devices",s:"Manage access to WattsHub"},
     settings:{t:"Settings",s:"Family & app preferences"},
   };
   const vm=vmeta[view]||vmeta.dashboard;
@@ -2687,6 +3336,13 @@ export default function WattsHub(){
       {allowanceKid&&<AllowanceModal kid={kidById(allowanceKid)} onClose={()=>setAllowanceKid(null)} onSave={saveAllowance}/>}
       {/* BATCH 5: Change PIN modal */}
       {showChangePIN&&<ChangePINModal onClose={()=>setShowChangePIN(false)} onSaved={()=>{setShowChangePIN(false);toast('PIN updated!');}}/>}
+      {focusOpen&&<FocusTimerModal
+        chore={focusTarget?.chore||null}
+        kidMode={false}
+        kidId={focusTarget?.kidId||null}
+        onClose={()=>{setFocusOpen(false);setFocusTarget(null);}}
+        onComplete={onFocusSessionComplete}
+        toast={toast}/>}
       <BottomNav/>
 
       <div className="app">
@@ -2700,6 +3356,7 @@ export default function WattsHub(){
               {id:"store",ic:"🛍️",lbl:"Store"},
               {id:"money",ic:"💵",lbl:"Money"},
               {id:"activity",ic:"↻",lbl:"Activity"},
+              {id:"devices",ic:"📱",lbl:"Devices"},
               {id:"settings",ic:"⚙",lbl:"Settings"},
             ].map(n=>(
               <button key={n.id} className={`ni${view===n.id?" act":""}`} onClick={()=>{setView(n.id);if(!["chores","store","money"].includes(n.id))setActiveKid(null);}}>
@@ -2735,9 +3392,10 @@ export default function WattsHub(){
             <div style={{display:"flex",alignItems:"center",gap:7}}>
               {pendCount>0&&parentMode&&<span style={{background:"rgba(245,166,35,.13)",color:"var(--am)",fontSize:11,fontWeight:800,padding:"3px 8px",borderRadius:5}}>{pendCount} pending</span>}
               {ready&&<span style={{background:"rgba(45,212,167,.09)",color:"var(--te)",fontSize:11,fontWeight:800,padding:"3px 8px",borderRadius:5}}>● Live</span>}
+              <button className="btn btn-g btn-sm" title="Start a focus timer" onClick={()=>{setFocusTarget(null);setFocusOpen(true);}}>⏱ Focus</button>
               {parentMode&&view==="store"&&<button className="btn btn-g btn-sm" onClick={()=>setShowAddItem(true)}>+ Item</button>}
-              {parentMode&&view!=="settings"&&<button className="btn btn-p btn-sm" onClick={()=>setShowAddChore(true)}>+ Chore</button>}
-              {parentMode&&view!=="settings"&&<button className="btn btn-g btn-sm" onClick={()=>setShowAddKid(true)}>+ Kid</button>}
+              {parentMode&&view!=="settings"&&view!=="devices"&&<button className="btn btn-p btn-sm" onClick={()=>setShowAddChore(true)}>+ Chore</button>}
+              {parentMode&&view!=="settings"&&view!=="devices"&&<button className="btn btn-g btn-sm" onClick={()=>setShowAddKid(true)}>+ Kid</button>}
             </div>
           </div>
           <div className="content">
@@ -2746,6 +3404,13 @@ export default function WattsHub(){
             {view==="store"&&<StoreView/>}
             {view==="money"&&<MoneyView/>}
             {view==="activity"&&<ActivityView/>}
+            {view==="devices"&&<DevicesView
+              authUid={authUid}
+              allowedUids={allowedUids}
+              pendingAccess={pendingAccess}
+              onApprove={approveDevice}
+              onDeny={denyDevice}
+              onRevoke={revokeDevice}/>}
             {view==="settings"&&<SettingsView/>}
           </div>
         </main>
