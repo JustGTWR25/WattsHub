@@ -2,18 +2,52 @@
   "rules": {
     "wh": {
       "allowedUids": {
-        ".read": "auth != null && root.child('wh/allowedUids').child(auth.uid).exists()",
+        ".read": "auth != null",
         ".write": "auth != null && root.child('wh/allowedUids').child(auth.uid).child('role').val() === 'admin'"
       },
-      "pendingAccess": {
-        ".read": "auth != null && root.child('wh/allowedUids').child(auth.uid).child('role').val() === 'admin'",
-        "$uid": {
-          ".read": "auth != null && auth.uid === $uid",
-          ".write": "auth != null && (auth.uid === $uid || root.child('wh/allowedUids').child(auth.uid).child('role').val() === 'admin')",
-          ".validate": "newData.hasChildren(['requestedAt']) && newData.child('requestedAt').isNumber()"
+      "kids": {
+        ".read": "auth != null && root.child('wh/allowedUids').child(auth.uid).exists()",
+        ".write": "auth != null && root.child('wh/allowedUids').child(auth.uid).exists()"
+      },
+      "chores": {
+        ".read": "auth != null && root.child('wh/allowedUids').child(auth.uid).exists()",
+        ".write": "auth != null && root.child('wh/allowedUids').child(auth.uid).exists()"
+      },
+      "comps": {
+        ".read": "auth != null && root.child('wh/allowedUids').child(auth.uid).exists()",
+        ".write": "auth != null && root.child('wh/allowedUids').child(auth.uid).exists()"
+      },
+      "weekXp": {
+        ".read": "auth != null && root.child('wh/allowedUids').child(auth.uid).exists()",
+        ".write": "auth != null && root.child('wh/allowedUids').child(auth.uid).exists()"
+      },
+      "store": {
+        ".read": "auth != null && root.child('wh/allowedUids').child(auth.uid).exists()",
+        ".write": "auth != null && root.child('wh/allowedUids').child(auth.uid).exists()"
+      },
+      "txlog": {
+        ".read": "auth != null && root.child('wh/allowedUids').child(auth.uid).exists()",
+        ".write": "auth != null && root.child('wh/allowedUids').child(auth.uid).exists()"
+      },
+      "summerProgram": {
+        "config": {
+          ".read": "auth != null && root.child('wh/allowedUids').child(auth.uid).exists()",
+          ".write": "auth != null && root.child('wh/allowedUids').child(auth.uid).child('role').val() === 'admin'"
+        },
+        "kids": {
+          "$kidId": {
+            ".read": "auth != null && root.child('wh/allowedUids').child(auth.uid).exists()",
+            ".write": "auth != null && root.child('wh/allowedUids').child(auth.uid).exists()"
+          }
         }
       },
-      "$section": {
+      "summerSessions": {
+        "$kidId": {
+          ".read": "auth != null && root.child('wh/allowedUids').child(auth.uid).exists()",
+          ".write": "auth != null && root.child('wh/allowedUids').child(auth.uid).exists()"
+        }
+      },
+      "reports": {
         ".read": "auth != null && root.child('wh/allowedUids').child(auth.uid).exists()",
         ".write": "auth != null && root.child('wh/allowedUids').child(auth.uid).exists()"
       }

@@ -1,166 +1,263 @@
-# WattsHub Batch 1 — Deployment Checklist
+# WattsHub — Summer Integration Batch Deployment
+## Complete guide · June 2026
 
-This batch delivers three things in one code drop:
-
-1. **Firebase Anonymous Auth + allowlist** (satisfies the security rules deadline)
-2. **Per-chore reminders** (time-based push notifications)
-3. **Focus timer** (Pomodoro with optional XP bonus, per-kid configurable)
-
-## Files in this drop
-
-| File | Goes to |
-| --- | --- |
-| `App.jsx` | `src/App.jsx` (replaces existing) |
-| `firebase.js` | `src/firebase.js` (replaces existing) |
-| `firebase-messaging-sw.js` | `public/firebase-messaging-sw.js` (replaces existing) |
-| `functions/index.js` | `functions/index.js` (replaces existing) |
-| `functions/package.json` | `functions/package.json` (replaces existing — upgrades Node from 18 → 20) |
-| `database.rules.json` | Project root, then deploy via Firebase CLI |
+This is a single batch update. Deploy everything together in the order below.
 
 ---
 
-## Deployment order (critical — follow exactly)
+## Files in this package
 
-### Step 1 — Enable Anonymous Auth in Firebase
+| File | Destination in your repo | What changed |
+|------|--------------------------|--------------|
+| `App.jsx` | `src/App.jsx` | Full rebuild with summer nav, kid mode tab, summer listeners, all existing features intact |
+| `src/components/summer/SummerModule.jsx` | `src/components/summer/SummerModule.jsx` | New — full summer UI |
+| `src/components/summer/summerConfig.js` | `src/components/summer/summerConfig.js` | New — config constants |
+| `summer_functions_v2.js` | Append to `functions/index.js` | New cloud functions + schedule fix |
+| `database.rules.json` | Project root `database.rules.json` | Adds summer + session + reports nodes |
 
-Console → Authentication → Sign-in method → Anonymous → **Enable**.
+---
 
-Skipping this step means sign-in fails and nobody can use the app.
+## Step 1 — Confirm your Firebase field names (5 min)
 
-### Step 2 — Deploy the app code (Vercel)
+Open Firebase Console → Realtime Database → `wh/kids/` → click any kid node.
 
-1. Replace the files listed above in your repo.
-2. Commit and push.
-3. Vercel will auto-deploy.
-4. Open WattsHub. You'll see the Auth Gate screen — it will sign you in anonymously and display your device UID.
-5. **Copy your UID** from the screen (it's selectable).
+Look for two fields:
+- **XP field**: probably `xp` ✓ (already confirmed)
+- **Dollar/balance field**: could be `balanceCents`, `allowance`, or `dollars`
 
-### Step 3 — Bootstrap your first admin UID
+If your dollar field is **not** `balanceCents`, update these two places before deploying:
 
-Firebase Console → Realtime Database → Data tab.
-
-Manually create this structure (click the `+` next to root):
-
-```
-wh/
-  allowedUids/
-    <YOUR_COPIED_UID>/
-      uid: "<YOUR_COPIED_UID>"
-      label: "Greg's main device"
-      role: "admin"
-      approvedAt: 1745345000000  (any timestamp; value doesn't matter)
+**File 1 — `src/components/summer/summerConfig.js`:**
+```js
+DOLLARS_FIELD: 'balanceCents',  // ← change this
 ```
 
-Use the "Import JSON" feature if easier — paste:
-
-```json
-{
-  "YOUR_UID_HERE": {
-    "uid": "YOUR_UID_HERE",
-    "label": "Greg's main device",
-    "role": "admin",
-    "approvedAt": 1745345000000
-  }
-}
+**File 2 — `functions/index.js` (the new section):**
+```js
+DOLLARS_FIELD: 'balanceCents',  // ← change this too
 ```
 
-at path `wh/allowedUids`.
+---
 
-### Step 4 — Deploy the security rules
+## Step 2 — Add the new component files to your repo
 
-From your repo root:
+Create the directory if it doesn't exist:
+```
+src/components/summer/
+```
 
+Place these two files in it:
+- `SummerModule.jsx`
+- `summerConfig.js`
+
+---
+
+## Step 3 — Replace App.jsx
+
+Replace `src/App.jsx` entirely with the new `App.jsx` from this package.
+
+**What's new vs your current App.jsx:**
+- ☀️ Summer nav item added to sidebar and mobile bottom nav
+- Summer view wired into content router
+- Kid mode gets a Summer tab (alongside Tasks/Store/Money)
+- `KidSummerCard` appears in kid mode — daily session logging lives here
+- `SummerNavBadge` shows live streak count next to Summer nav item
+- Three new Firebase listeners: `summerProgram/kids`, `reports/weekly`, `reports/monthly`
+- Summer mini-stats (sessions/XP/streak) now appear on each kid's dashboard card
+- All existing features (chores, store, money, activity, focus timer, PIN, devices) are intact
+
+---
+
+## Step 4 — Update Cloud Functions
+
+Open `functions/index.js`. Paste the entire contents of `summer_functions_v2.js`
+at the **bottom** of the file, below all existing functions.
+
+**Key changes:**
+- `generateWeeklySummary` schedule changed from Sunday 9 PM → **Friday 8 PM CT**
+  so reports are ready before your Sunday family check-in
+- `generateWeeklyReport` is now also an HTTP callable (powers the "Generate Now" button)
+- `completeSummerSession` callable added as a server-side fallback
+  (SummerModule.jsx writes directly to Firebase by default — this is a backup)
+
+Then deploy only the new functions:
+```bash
+firebase deploy --only functions:completeSummerSession,generateWeeklySummary,generateWeeklyReport,generateMonthlySummary
+```
+
+---
+
+## Step 5 — Update Firebase security rules
+
+Replace your `database.rules.json` with the one in this package.
+
+Deploy:
 ```bash
 firebase deploy --only database
 ```
 
-If you don't already have `firebase.json` configured for rules, add this:
+New nodes covered:
+- `wh/summerProgram/config` — read: any allowed UID, write: admin only
+- `wh/summerProgram/kids/{kidId}` — read/write: any allowed UID
+- `wh/summerSessions/{kidId}` — read/write: any allowed UID
+- `wh/reports/*` — read/write: any allowed UID
+
+---
+
+## Step 6 — Seed the summer program config
+
+In Firebase Console → Realtime Database, navigate to `wh/` and add the
+`summerProgram/config` node manually, or use the Import JSON option.
+
+Copy this JSON into the Firebase console at path `wh/summerProgram`:
 
 ```json
 {
-  "database": { "rules": "database.rules.json" }
+  "config": {
+    "startDate": "2026-06-09",
+    "endDate": "2026-08-15",
+    "dailyXP": 10,
+    "streakBonusThreshold": 5,
+    "streakBonusMultiplier": 1.5,
+    "daysPerWeek": 4,
+    "sessionMinutes": 60,
+    "active": true
+  },
+  "kids": {
+    "REPLACE_TAYONNA_UID": {
+      "displayName": "Tayonna",
+      "grade": "12",
+      "totalXPEarned": 0,
+      "totalSessionsCompleted": 0,
+      "currentStreak": 0,
+      "longestStreak": 0,
+      "lastSessionDate": null
+    },
+    "REPLACE_BRIANNA_UID": {
+      "displayName": "Brianna",
+      "grade": "9",
+      "totalXPEarned": 0,
+      "totalSessionsCompleted": 0,
+      "currentStreak": 0,
+      "longestStreak": 0,
+      "lastSessionDate": null
+    },
+    "REPLACE_LEON_UID": {
+      "displayName": "Leon",
+      "grade": "5",
+      "totalXPEarned": 0,
+      "totalSessionsCompleted": 0,
+      "currentStreak": 0,
+      "longestStreak": 0,
+      "lastSessionDate": null
+    }
+  }
 }
 ```
 
-**From this point, the Firebase 30-day timer is satisfied. The nag email stops.**
+Replace `REPLACE_TAYONNA_UID`, `REPLACE_BRIANNA_UID`, `REPLACE_LEON_UID` with
+the actual Firebase push keys from `wh/kids/`.
 
-### Step 5 — Deploy Cloud Functions
+---
+
+## Step 7 — Deploy the app (Vercel)
 
 ```bash
-cd functions
-npm install
-cd ..
-firebase deploy --only functions
+git add .
+git commit -m "feat: summer program integration — session logging, reports, kid mode tab"
+git push
 ```
 
-First deploy will prompt you to enable billing (Blaze plan) if you haven't — required for Cloud Functions, but usage will sit in the free tier.
-
-### Step 6 — Verify
-
-1. Refresh WattsHub in your browser. You should land on the profile picker (not the auth gate).
-2. Open parent mode → Devices. You should see your own device in the approved list with "admin" badge and a blue "This device" tag.
-3. Open a second browser / incognito tab and go to WattsHub. You should see the Auth Gate with "Request access." Submit a request.
-4. Back in parent mode → Devices. The pending request should appear. Approve it.
-5. The second tab can now be refreshed and will enter the app.
+Vercel auto-deploys on push. Build takes ~60 seconds.
 
 ---
 
-## Testing the three features
+## Step 8 — Smoke test checklist
 
-### Test 1 — Auth works
+After deploy, open WattsHub and verify each of these:
 
-- Incognito window should show auth gate
-- Requesting access writes to `wh/pendingAccess/<uid>`
-- Approving from parent mode moves it to `wh/allowedUids/<uid>`
+**Parent mode:**
+- [ ] ☀️ Summer nav item appears in sidebar
+- [ ] Summer overview cards show Tayonna, Brianna, Leon with zeroed stats
+- [ ] Weekly tab → "Generate Now" button works, creates a report entry
+- [ ] Monthly tab loads without errors
+- [ ] Dashboard kid cards show summer mini-stats chips
+- [ ] PDF export (print) works from Summer view
 
-### Test 2 — Per-chore reminders
+**Kid mode (log in as Tayonna):**
+- [ ] Summer tab appears in bottom tab bar
+- [ ] `KidSummerCard` appears in Tasks tab above chore list
+- [ ] "Session Complete" button is visible and tappable (min 52px height)
+- [ ] Completing a session shows XP gained and updates streak
+- [ ] Completing a session writes to Firebase: `wh/summerProgram/kids/{id}` and `wh/kids/{id}/xp`
+- [ ] Streak alert appears when streak ≥ 3 (bonus pending) or ≥ 5 (bonus active)
 
-1. Parent mode → Chores → click any chore → Edit.
-2. Scroll to "Reminders" → "+ Add reminder time."
-3. Set a time about 3 minutes in the future. Click the day-of-week chips for today (or leave all off = every day).
-4. Save.
-5. Wait up to 15 minutes. The kid assigned to that chore will get a push notification with "Snooze 15m" and "On it" buttons.
-
-**Debug if nothing fires:** Firebase Console → Functions → Logs. Look at the `choreReminders` function logs. It runs every 15 minutes — check the last invocation to see what it saw.
-
-### Test 3 — Focus timer
-
-1. Kid mode → any chore → "⏱ Focus" button.
-2. Pick a preset (Quick 15/3, Standard 25/5, Deep 45/10).
-3. Click "Start focus."
-4. Timer runs. Try closing the tab and reopening — the timer resumes at the correct position (it uses wall-clock math).
-5. When the focus period ends, audio beep fires and break starts automatically.
-6. Completed sessions log to `wh/focusSessions/<id>`.
-
-**To test XP bonus:** Parent mode → edit any kid → enable "Focus session XP bonus." Complete a 25m session as that kid → you should get +2 XP and a "🎯 Focus complete!" toast.
+**Mobile (≤680px):**
+- [ ] Summer icon appears in bottom nav
+- [ ] Session complete button is at least 52px tall and easy to tap
+- [ ] No layout overflow on iPhone-sized viewport
 
 ---
 
-## Rollback plan
+## What each kid sees
 
-If something goes sideways:
+When a kid opens the app and picks their profile:
 
-1. **Revert the app deploy:** Vercel → Deployments → roll back to the previous green deploy.
-2. **Revert the rules** (to restore access if locked out): Firebase Console → Realtime Database → Rules → paste `{"rules": {".read": "auth != null", ".write": "auth != null"}}` and publish. This still requires Firebase Auth to be enabled, so make sure you leave Step 1 in place.
-3. **Nuclear option:** Firebase Console → Realtime Database → Rules → paste `{"rules": {".read": true, ".write": true}}`. Fully open for 30 more days. Use only as a last resort.
+1. Their **Tasks** tab shows a summer session card at the top with:
+   - Today's focus (Math or Literacy, based on day of week)
+   - Current streak + XP counter
+   - "Session Complete" button (52px, prominent)
+   - Streak bonus alert when they're close to or past 5 days
+
+2. Their **Summer** tab shows just the session card (full focus mode)
+
+3. The session card is hidden on weekends and non-program days automatically
+
+## What you (parent) see
+
+- **Dashboard** — each kid card now shows summer sessions, XP earned, and streak
+- **Summer → Overview** — season stats per kid, attendance bars
+- **Summer → Weekly** — week-by-week breakdown, generate any week on demand
+- **Summer → Monthly** — auto-generates on the 1st; shows week breakdown
+- **PDF export** — browser print from any report view
 
 ---
 
-## What's stored under `wh/`
+## Schedule reference
 
-New paths this batch introduces:
-
-- `wh/allowedUids/{uid}` — approved devices (`{uid, label, role, approvedBy, approvedAt}`)
-- `wh/pendingAccess/{uid}` — access requests (`{uid, label, userAgent, requestedAt}`)
-- `wh/snoozes/{kidId}/{choreId}` — reminder snoozes (`{snoozedUntil, setAt}`)
-- `wh/focusSessions/{sessionId}` — completed focus sessions (`{kidId, choreId, duration, completedAt}`)
-- Chore docs now optionally have `chore.reminders = [{time, daysOfWeek}]`
-- Kid docs now optionally have `kid.focusBonus = {enabled, xp25, xp45, dailyCap}`
+| Trigger | When | Notes |
+|---------|------|-------|
+| Weekly report auto-generate | **Friday 8 PM CT** | Ready for Sunday check-in |
+| Monthly report auto-generate | 1st of month, 8 AM CT | Covers prior month |
+| In-app "Generate Now" | Any time | Generates current week |
 
 ---
 
-## Known minor items, for awareness
+## XP math reference
 
-- **`firebase-messaging-sw.js`** still has placeholder strings for the config. If your service worker isn't receiving pushes, open `public/firebase-messaging-sw.js` and paste your real Firebase config values into the `firebase.initializeApp({...})` call (replacing the `REPLACE_WITH_YOUR_*` placeholders). Service workers can't read `import.meta.env`, so this file always needs real values.
-- **Node 20** — the updated `functions/package.json` uses Node 20. Firebase deprecated Node 18 for new deployments. If `firebase deploy --only functions` complains, you may need to upgrade firebase-tools (`npm install -g firebase-tools@latest`).
-- **Audio beep on focus timer** requires user interaction before audio context is allowed (browser rule). The first beep may be silent if the user hasn't clicked anything in the modal yet — clicking "Start focus" satisfies this.
+| Scenario | XP | Cents earned |
+|----------|----|-------------|
+| Normal session | 10 | 50¢ |
+| 5+ day streak session | 15 | 75¢ |
+| Perfect 4-day week, no streak | 40 | $2.00 |
+| Perfect 4-day week, streak active | 60 | $3.00 |
+
+---
+
+## Troubleshooting
+
+**"Session already logged today" error:**
+The duplicate check works by date string (`YYYY-MM-DD`). If you're testing and need to reset, delete the session from `wh/summerSessions/{kidId}` in the Firebase console.
+
+**XP not writing to main kid node:**
+Confirm `DOLLARS_FIELD` matches your actual Firebase field. Check `wh/kids/{id}` in the console and look for the balance field name.
+
+**Summer nav not appearing:**
+Make sure the import at the top of `App.jsx` resolves correctly:
+```js
+import { SummerView, KidSummerCard, SummerNavBadge } from './components/summer/SummerModule';
+```
+The file must be at `src/components/summer/SummerModule.jsx`.
+
+**Cloud Functions failing:**
+Check Firebase Console → Functions → Logs. The most common cause is a missing `firebase-admin` initialization in `functions/index.js`. Make sure `admin.initializeApp()` is called once at the top of your functions file, before any of the new exports.
