@@ -19,11 +19,13 @@ async function initFirebase(cfg){
 function useFirebase(cfg){
   const[ready,setReady]=useState(false);
   const[uid,setUid]=useState(null);
+  const[dbInstance,setDbInstance]=useState(null);
   const listenersRef=useRef([]);
   useEffect(()=>{
     if(!cfg)return;
     initFirebase(cfg).then(ok=>{
       if(!ok)return;
+      setDbInstance(_db); // triggers re-render so db prop propagates to children
       _authState(_auth,async u=>{
         if(u){setUid(u.uid);setReady(true);}
         else{try{await _anon(_auth);}catch(e){console.warn("anon auth fail",e);setReady(true);}}
@@ -38,12 +40,12 @@ function useFirebase(cfg){
     const unsub=()=>_off(r);
     listenersRef.current.push(unsub);
     return unsub;
-  },[]);
-  const write=useCallback((path,val)=>{if(_db)return _set(_ref(_db,path),val);},[]);
-  const merge=useCallback((path,val)=>{if(_db)return _update(_ref(_db,path),val);},[]);
-  const del=useCallback((path)=>{if(_db)return _remove(_ref(_db,path));},[]);
-  const push=useCallback((path,val)=>{if(_db)return _push(_ref(_db,path),val);},[]);
-  return{ready,uid,db:_db,listen,write,merge,del,push};
+  },[dbInstance]);
+  const write=useCallback((path,val)=>{if(_db)return _set(_ref(_db,path),val);},[dbInstance]);
+  const merge=useCallback((path,val)=>{if(_db)return _update(_ref(_db,path),val);},[dbInstance]);
+  const del=useCallback((path)=>{if(_db)return _remove(_ref(_db,path));},[dbInstance]);
+  const push=useCallback((path,val)=>{if(_db)return _push(_ref(_db,path),val);},[dbInstance]);
+  return{ready,uid,db:dbInstance,listen,write,merge,del,push};
 }
 
 /* ─── Toast hook ──────────────────────────────────────────────────────────── */
@@ -470,7 +472,17 @@ function FocusTimerModal({onClose,kids,onAwardXp}){
 /* ─── Main App ────────────────────────────────────────────────────────────── */
 export default function WattsHub(){
   /* Firebase config */
-  const[fbCfg,setFbCfg]=useState(()=>{try{const s=localStorage.getItem("wh_fbcfg");return s?JSON.parse(s):null;}catch{return null;}});
+  const[fbCfg,setFbCfg]=useState(()=>{
+    // Check all key names the app has used across versions
+    const keys=["wh_fbcfg","wh3_cfg","wh_fb","wh_firebase","wattshub_cfg"];
+    try{
+      for(const k of keys){
+        const s=localStorage.getItem(k);
+        if(s){const p=JSON.parse(s);if(p?.apiKey&&p?.databaseURL)return p;}
+      }
+    }catch{}
+    return null;
+  });
   const[showCfg,setShowCfg]=useState(false);
   const{ready,uid,db,listen,write,merge,del,push}=useFirebase(fbCfg);
 
@@ -1132,7 +1144,7 @@ export default function WattsHub(){
     return(
       <>
         <style>{CSS}</style>
-        {showCfg&&<FirebaseCfgModal onSave={cfg=>{localStorage.setItem("wh_fbcfg",JSON.stringify(cfg));setFbCfg(cfg);setShowCfg(false);}} onSkip={()=>setShowCfg(false)}/>}
+        {showCfg&&<FirebaseCfgModal onSave={cfg=>{localStorage.setItem("wh_fbcfg",JSON.stringify(cfg));localStorage.setItem("wh3_cfg",JSON.stringify(cfg));setFbCfg(cfg);setShowCfg(false);}} onSkip={()=>setShowCfg(false)}/>}
         <ProfilePicker kids={kids} onSelectKid={handlePickerKid} onSelectParent={handlePickerParent}/>
       </>
     );
@@ -1195,7 +1207,7 @@ export default function WattsHub(){
       <style>{CSS}</style>
 
       {/* Modals */}
-      {showCfg&&<FirebaseCfgModal onSave={cfg=>{localStorage.setItem("wh_fbcfg",JSON.stringify(cfg));setFbCfg(cfg);setShowCfg(false);}} onSkip={()=>setShowCfg(false)}/>}
+      {showCfg&&<FirebaseCfgModal onSave={cfg=>{localStorage.setItem("wh_fbcfg",JSON.stringify(cfg));localStorage.setItem("wh3_cfg",JSON.stringify(cfg));setFbCfg(cfg);setShowCfg(false);}} onSkip={()=>setShowCfg(false)}/>}
       {showAddChore&&<ChoreModal/>}
       {showAddKid&&<AddKidModal/>}
       {showAddItem&&<AddItemModal/>}
