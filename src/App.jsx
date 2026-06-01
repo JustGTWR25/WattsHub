@@ -43,7 +43,7 @@ function useFirebase(cfg){
   const merge=useCallback((path,val)=>{if(_db)return _update(_ref(_db,path),val);},[]);
   const del=useCallback((path)=>{if(_db)return _remove(_ref(_db,path));},[]);
   const push=useCallback((path,val)=>{if(_db)return _push(_ref(_db,path),val);},[]);
-  return{ready,uid,listen,write,merge,del,push};
+  return{ready,uid,db:_db,listen,write,merge,del,push};
 }
 
 /* ─── Toast hook ──────────────────────────────────────────────────────────── */
@@ -472,7 +472,7 @@ export default function WattsHub(){
   /* Firebase config */
   const[fbCfg,setFbCfg]=useState(()=>{try{const s=localStorage.getItem("wh_fbcfg");return s?JSON.parse(s):null;}catch{return null;}});
   const[showCfg,setShowCfg]=useState(false);
-  const{ready,uid,listen,write,merge,del,push}=useFirebase(fbCfg);
+  const{ready,uid,db,listen,write,merge,del,push}=useFirebase(fbCfg);
 
   /* Core state */
   const[kids,setKids]=useState(KIDS0);
@@ -1017,12 +1017,12 @@ export default function WattsHub(){
         <div className="km-content">
           {kmTab==="chores"&&(
             <div>
-              <KidSummerCard kidId={activeKid} kidName={kid.name}/>
+              <KidSummerCard db={db} kidId={activeKid} kidName={kid.name}/>
               <ChoresView/>
             </div>
           )}
           {kmTab==="summer"&&(
-            <KidSummerCard kidId={activeKid} kidName={kid.name}/>
+            <KidSummerCard db={db} kidId={activeKid} kidName={kid.name}/>
           )}
           {kmTab==="store"&&<StoreView/>}
           {kmTab==="money"&&<MoneyView/>}
@@ -1216,7 +1216,7 @@ export default function WattsHub(){
                 onClick={()=>{setView(n.id);if(!["chores","store","money"].includes(n.id))setActiveKid(null);}}>
                 <span className="ic">{n.ic}</span>{n.lbl}
                 {n.id==="chores"&&pendCount>0&&<span className="nav-badge">{pendCount}</span>}
-                {n.id==="summer"&&<SummerNavBadge kidId={null}/>}
+                {n.id==="summer"&&<SummerNavBadge db={db} kidId={null}/>}
               </button>
             ))}
           </div>
@@ -1279,6 +1279,7 @@ export default function WattsHub(){
             {view==="activity"&&<ActivityView/>}
             {view==="summer"&&(
               <SummerView
+                db={db}
                 kids={kids}
                 summerKids={summerKids}
                 weekly={summerWeekly}
