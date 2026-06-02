@@ -1,4 +1,4 @@
-import{useState,useEffect,useCallback,useMemo,useRef}from"react";
+import{useState,useEffect,useCallback,useMemo,useRef,Component}from"react";
 import{SummerView,KidSummerCard,SummerNavBadge}from"./components/summer/SummerModule";
 
 /* ─── Firebase loader ─────────────────────────────────────────────────────── */
@@ -16,32 +16,33 @@ async function initFirebase(cfg){
 }
 
 /* ─── useFirebase hook ────────────────────────────────────────────────────── */
-/* FIX: all db ops use stable refs — never stale regardless of render timing  */
 function useFirebase(cfg){
   const[ready,setReady]=useState(false);
   const[uid,setUid]=useState(null);
   const[dbInst,setDbInst]=useState(null);
+  const[online,setOnline]=useState(true);
   const listenersRef=useRef([]);
-  /* stable function refs that always read current _db */
   const fn={
     listen:useCallback((path,cb)=>{
       if(!_db)return()=>{};
       const r=_ref(_db,path);_on(r,s=>cb(s.val()));
       const u=()=>_off(r);listenersRef.current.push(u);return u;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     },[dbInst]),
     write:useCallback((path,val)=>{if(_db)return _set(_ref(_db,path),val);},[dbInst]),
     merge:useCallback((path,val)=>{if(_db)return _update(_ref(_db,path),val);},[dbInst]),
     del:useCallback((path)=>{if(_db)return _remove(_ref(_db,path));},[dbInst]),
     push:useCallback((path,val)=>{if(_db)return _push(_ref(_db,path),val);},[dbInst]),
+    /* atomic: write multiple paths in one Firebase update call */
+    atomic:useCallback((updates)=>{if(_db)return _update(_ref(_db),updates);},[dbInst]),
   };
-  /* store latest fns in ref so closures inside action fns always get current */
   const fnRef=useRef(fn);fnRef.current=fn;
   useEffect(()=>{
     if(!cfg)return;
     initFirebase(cfg).then(ok=>{
       if(!ok)return;
       setDbInst(_db);
+      /* online/offline indicator */
+      _on(_ref(_db,".info/connected"),s=>{setOnline(!!s.val());});
       _authState(_auth,async u=>{
         if(u){setUid(u.uid);setReady(true);}
         else{try{await _anon(_auth);}catch(e){console.warn("anon auth",e);setReady(true);}}
@@ -49,7 +50,24 @@ function useFirebase(cfg){
     });
     return()=>{listenersRef.current.forEach(f=>f());listenersRef.current=[];};
   },[cfg]);
-  return{ready,uid,db:dbInst,fnRef,...fn};
+  return{ready,uid,db:dbInst,online,fnRef,...fn};
+}
+
+/* ─── ErrorBoundary ───────────────────────────────────────────────────────── */
+class ErrorBoundary extends Component{
+  constructor(p){super(p);this.state={err:null};}
+  static getDerivedStateFromError(e){return{err:e};}
+  render(){
+    if(this.state.err)return(
+      <div style={{padding:"2rem",textAlign:"center",color:"var(--tx3)"}}>
+        <div style={{fontSize:28,marginBottom:12}}>⚠️</div>
+        <div style={{fontSize:14,fontWeight:700,color:"var(--tx2)",marginBottom:6}}>Something went wrong</div>
+        <div style={{fontSize:12,marginBottom:16}}>{this.state.err.message}</div>
+        <button className="btn btn-g btn-sm" onClick={()=>this.setState({err:null})}>Try again</button>
+      </div>
+    );
+    return this.props.children;
+  }
 }
 
 /* ─── Toast hook ──────────────────────────────────────────────────────────── */
@@ -67,15 +85,48 @@ function useToasts(){
 const today=()=>new Date().toISOString().split("T")[0];
 const parseDate=s=>new Date(s+"T00:00:00");
 const weekKey=d=>{const dt=parseDate(d),j=new Date(dt.getFullYear(),0,1),wk=Math.ceil(((dt-j)/86400000+j.getDay()+1)/7);return`${dt.getFullYear()}-W${String(wk).padStart(2,"0")}`;}
-const monthKey=d=>{const dt=parseDate(d);return`${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}`;}
 const ckey=(cId,kId)=>`${cId}_${kId}`;
-const fmtDollars=c=>`$${((c||0)/100).toFixed(2)}`;
+const fmtDollars=c=>`$${(Math.round(c||0)/100).toFixed(2)}`;
+/* FIX: unique txlog key — timestamp + kidId + random suffix prevents collisions */
+const txId=(kidId)=>`tx_${Date.now()}_${kidId}_${Math.random().toString(36).slice(2,6)}`;
 const COLORS=[
   {bg:"rgba(124,111,247,0.18)",tx:"#a99df9",ring:"#7c6ff7"},
   {bg:"rgba(45,212,167,0.18)",tx:"#2dd4a7",ring:"#2dd4a7"},
   {bg:"rgba(248,122,176,0.18)",tx:"#f87ab0",ring:"#e879a0"},
   {bg:"rgba(74,158,255,0.18)",tx:"#4a9eff",ring:"#4a9eff"},
   {bg:"rgba(245,166,35,0.18)",tx:"#f5a623",ring:"#f5a623"},
+];
+
+/* ─── Module-level constants (not recreated on render) ─────────────────────── */
+const STORE_DEFAULTS=[
+  {id:"si_d1",name:"30 min screen time",emoji:"📱",priceCents:50},
+  {id:"si_d2",name:"Pick dinner",emoji:"🍕",priceCents:100},
+  {id:"si_d3",name:"Stay up 30 min",emoji:"🌙",priceCents:80},
+  {id:"si_d4",name:"Skip one chore",emoji:"🎯",priceCents:150},
+  {id:"si_d5",name:"Movie night pick",emoji:"🎬",priceCents:120},
+  {id:"si_d6",name:"Cash out $1",emoji:"💵",priceCents:100},
+];
+const MONEY_BUCKETS=[
+  {key:"save",label:"Save",color:"var(--te)",pct:50},
+  {key:"spend",label:"Spend",color:"var(--am)",pct:40},
+  {key:"share",label:"Share",color:"var(--pk)",pct:10},
+];
+const NAV_ITEMS=[
+  {id:"dashboard",ic:"⬡",lbl:"Dashboard"},
+  {id:"chores",ic:"✓",lbl:"Chores"},
+  {id:"store",ic:"🛍️",lbl:"Store"},
+  {id:"money",ic:"💵",lbl:"Money"},
+  {id:"activity",ic:"↻",lbl:"Activity"},
+  {id:"summer",ic:"☀️",lbl:"Summer"},
+  {id:"devices",ic:"⊞",lbl:"Devices"},
+  {id:"settings",ic:"⚙",lbl:"Settings"},
+];
+const BNAV=[
+  {id:"dashboard",ic:"⬡",lbl:"Home"},
+  {id:"chores",ic:"✓",lbl:"Chores"},
+  {id:"summer",ic:"☀️",lbl:"Summer"},
+  {id:"store",ic:"🛍️",lbl:"Store"},
+  {id:"activity",ic:"↻",lbl:"Log"},
 ];
 
 /* ─── Seed data ───────────────────────────────────────────────────────────── */
@@ -94,7 +145,6 @@ const CHORES0=[
 
 /* ─── CSS ─────────────────────────────────────────────────────────────────── */
 const CSS=`
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&family=DM+Mono:wght@400;500&display=swap');
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
 :root{
   --bg:#0c0c14;--s1:#13131f;--s2:#1a1a2e;--s3:#22223d;--s4:#2c2c50;
@@ -102,9 +152,10 @@ const CSS=`
   --tx1:#eeeeff;--tx2:#8888bb;--tx3:#44447a;
   --pu:#7c6ff7;--pul:#a99df9;--pud:#4a42c8;
   --te:#2dd4a7;--am:#f5a623;--co:#f06060;--pk:#e879a0;--bl:#4a9eff;--gn:#4ade80;
-  --r:12px;--rl:18px;--rs:7px;--sh:0 4px 32px rgba(0,0,0,0.5);
-  --f:'Outfit',sans-serif;--fm:'DM Mono',monospace;
+  --r:12px;--rl:18px;--sh:0 4px 32px rgba(0,0,0,0.5);
+  --f:'Outfit',system-ui,sans-serif;--fm:'DM Mono',monospace;
 }
+@font-face{font-family:'Outfit';font-display:swap;src:local('Outfit');}
 html,body{background:var(--bg);color:var(--tx1);font-family:var(--f);min-height:100vh;min-height:-webkit-fill-available;-webkit-tap-highlight-color:transparent;}
 ::-webkit-scrollbar{width:3px;height:3px;}::-webkit-scrollbar-thumb{background:var(--s4);border-radius:2px;}
 button,input,select,textarea{font-family:var(--f);-webkit-appearance:none;}
@@ -144,26 +195,25 @@ button,input,select,textarea{font-family:var(--f);-webkit-appearance:none;}
 .kcard{background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);padding:16px;display:flex;flex-direction:column;gap:10px;cursor:pointer;transition:border-color .15s;}
 .kcard:hover{border-color:var(--b2);}
 .kcard-head{display:flex;align-items:center;gap:12px;}
-.av{display:flex;align-items:center;justify-content:center;border-radius:50%;font-weight:900;flex-shrink:0;}
 .av-xs{display:flex;align-items:center;justify-content:center;border-radius:50%;font-weight:900;font-size:9px;}
 .kname{font-size:15px;font-weight:800;}.kage{font-size:11px;color:var(--tx3);}
 .chips{display:flex;gap:6px;flex-wrap:wrap;}
 .chip{font-size:11px;font-weight:700;padding:3px 9px;border-radius:20px;background:var(--s3);color:var(--tx2);}
+/* FIX: optimistic pending state on chore cards */
 .ccard{background:var(--s2);border:1px solid var(--b1);border-radius:var(--r);padding:12px 14px;display:flex;align-items:center;gap:12px;cursor:pointer;transition:all .15s;margin-bottom:8px;}
-.ccard:hover{border-color:var(--b2);}.ccard.done{opacity:.55;}.ccard.pending{border-color:rgba(245,166,35,.35);}
+.ccard:hover{border-color:var(--b2);}.ccard.done{opacity:.55;}.ccard.pending{border-color:rgba(245,166,35,.35);}.ccard.optimistic{opacity:.7;}
 .ccheck{width:22px;height:22px;border-radius:6px;border:2px solid var(--b3);display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .15s;}
-.ccheck.done{background:var(--te);border-color:var(--te);}.ccheck.pending{background:var(--am);border-color:var(--am);}
+.ccheck.done{background:var(--te);border-color:var(--te);}.ccheck.pending{background:var(--am);border-color:var(--am);}.ccheck.optimistic{background:var(--s4);border-color:var(--pul);}
 .ctitle{font-size:13px;font-weight:700;flex:1;}
 .cdiff{font-size:10px;padding:2px 7px;border-radius:20px;font-weight:700;}
 .diff-easy{background:rgba(74,222,128,.12);color:var(--gn);}
 .diff-medium{background:rgba(245,166,35,.12);color:var(--am);}
 .diff-hard{background:rgba(240,96,96,.12);color:var(--co);}
 .cxp{font-size:11px;font-weight:800;color:var(--pul);}
-.store-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;}
-.sitem{background:var(--s2);border:1px solid var(--b1);border-radius:var(--r);padding:14px;display:flex;flex-direction:column;gap:8px;cursor:pointer;transition:all .15s;}
-.sitem:hover{border-color:var(--b2);}.sitem.can-afford{border-color:rgba(245,166,35,.4);}
-.sitem-em{font-size:28px;text-align:center;}.sitem-name{font-size:13px;font-weight:700;text-align:center;}
-.sitem-price{font-size:12px;font-weight:800;color:var(--am);text-align:center;}
+.store-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;}
+.sitem{background:var(--s2);border:1px solid var(--b1);border-radius:var(--r);padding:14px;display:flex;flex-direction:column;gap:8px;cursor:pointer;transition:all .15s;text-align:center;}
+.sitem:hover{border-color:var(--b2);transform:translateY(-1px);}.sitem.can-afford{border-color:rgba(245,166,35,.4);}
+.sitem-em{font-size:28px;}.sitem-name{font-size:13px;font-weight:700;}.sitem-price{font-size:12px;font-weight:800;color:var(--am);}
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:100;padding:16px;}
 .modal{background:var(--s2);border:1px solid var(--b2);border-radius:var(--rl);padding:22px;width:100%;max-width:460px;max-height:90vh;overflow-y:auto;}
 .modal-h{font-size:16px;font-weight:800;margin-bottom:16px;}
@@ -172,25 +222,27 @@ button,input,select,textarea{font-family:var(--f);-webkit-appearance:none;}
 .fi{background:var(--s3);border:1px solid var(--b2);border-radius:8px;padding:9px 12px;color:var(--tx1);font-size:13px;outline:none;}
 .fi:focus{border-color:var(--pu);}
 .fax{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;}
-.toasts{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:8px;z-index:200;}
-.toast{background:var(--s3);border:1px solid var(--b2);border-radius:10px;padding:10px 16px;font-size:13px;font-weight:600;box-shadow:var(--sh);animation:slideIn .2s ease;}
+.toasts{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:8px;z-index:200;pointer-events:none;}
+.toast{background:var(--s3);border:1px solid var(--b2);border-radius:10px;padding:10px 16px;font-size:13px;font-weight:600;animation:slideIn .2s ease;}
 @keyframes slideIn{from{transform:translateY(12px);opacity:0}to{transform:translateY(0);opacity:1}}
 .toast-info{border-color:rgba(124,111,247,.4);color:var(--pul);}
 .toast-success{border-color:rgba(45,212,167,.4);color:var(--te);}
 .toast-warn{border-color:rgba(245,166,35,.4);color:var(--am);}
 .toast-err{border-color:rgba(240,96,96,.4);color:var(--co);}
+.offline-bar{position:fixed;top:0;left:0;right:0;background:rgba(245,166,35,0.95);color:#000;font-size:12px;font-weight:700;text-align:center;padding:5px;z-index:300;}
 .dash-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;}
 .mbar-wrap{display:flex;flex-direction:column;gap:4px;margin:8px 0;}
 .mbar-row{display:flex;align-items:center;gap:8px;font-size:11px;}
 .mbar-label{width:40px;color:var(--tx3);}
 .mbar-track{flex:1;height:6px;background:var(--s4);border-radius:3px;overflow:hidden;}
 .mbar-fill{height:100%;border-radius:3px;transition:width .4s ease;}
-.mbar-val{width:48px;text-align:right;font-weight:700;color:var(--tx2);}
+.mbar-val{width:52px;text-align:right;font-weight:700;color:var(--tx2);}
 .alog{display:flex;flex-direction:column;}
 .alog-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--b1);}
 .alog-row:last-child{border-bottom:none;}
-.alog-time{font-size:10px;color:var(--tx3);width:70px;flex-shrink:0;}
-.alog-msg{font-size:13px;flex:1;}.alog-xp{font-size:11px;font-weight:800;color:var(--pul);}
+.alog-time{font-size:10px;color:var(--tx3);width:80px;flex-shrink:0;}
+.alog-msg{font-size:13px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.alog-xp{font-size:11px;font-weight:800;color:var(--pul);flex-shrink:0;}
 .picker-wrap{min-height:100vh;min-height:-webkit-fill-available;display:-webkit-flex;display:flex;-webkit-flex-direction:column;flex-direction:column;-webkit-align-items:center;align-items:center;-webkit-justify-content:center;justify-content:center;background:var(--bg);padding:24px;}
 .picker-title{font-size:22px;font-weight:900;color:var(--pul);margin-bottom:6px;}
 .picker-sub{font-size:13px;color:var(--tx3);margin-bottom:32px;}
@@ -204,15 +256,15 @@ button,input,select,textarea{font-family:var(--f);-webkit-appearance:none;}
 .pin-dot{width:14px;height:14px;border-radius:50%;border:2px solid var(--b3);transition:all .15s;}
 .pin-dot.filled{background:var(--pu);border-color:var(--pu);}
 .pin-pad{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;width:100%;}
-.pin-btn{background:var(--s3);border:1px solid var(--b2);border-radius:10px;color:var(--tx1);font-size:18px;font-weight:700;padding:14px;cursor:pointer;transition:all .15s;-webkit-appearance:none;}
+.pin-btn{background:var(--s3);border:1px solid var(--b2);border-radius:10px;color:var(--tx1);font-size:18px;font-weight:700;padding:14px;cursor:pointer;transition:all .15s;}
 .pin-btn:hover{background:var(--s4);}.pin-err{font-size:12px;color:var(--co);height:16px;}
 .km-wrap{display:-webkit-flex;display:flex;-webkit-flex-direction:column;flex-direction:column;min-height:100vh;min-height:-webkit-fill-available;background:var(--bg);}
 .km-header{padding:16px 16px 10px;display:-webkit-flex;display:flex;-webkit-align-items:center;align-items:center;gap:12px;border-bottom:1px solid var(--b1);}
 .km-name{font-size:18px;font-weight:900;}.km-sub{font-size:11px;color:var(--tx3);margin-top:1px;}
-.km-back{background:none;border:none;color:var(--tx3);cursor:pointer;font-size:12px;font-weight:600;padding:5px 10px;border-radius:7px;margin-left:auto;-webkit-appearance:none;}
+.km-back{background:none;border:none;color:var(--tx3);cursor:pointer;font-size:12px;font-weight:600;padding:5px 10px;border-radius:7px;margin-left:auto;}
 .km-back:hover{background:var(--b1);color:var(--tx1);}
 .km-tabs{display:-webkit-flex;display:flex;border-bottom:1px solid var(--b1);}
-.km-tab{-webkit-flex:1;flex:1;background:none;border:none;color:var(--tx3);cursor:pointer;font-size:13px;font-weight:700;padding:11px 0;transition:all .15s;-webkit-appearance:none;}
+.km-tab{-webkit-flex:1;flex:1;background:none;border:none;color:var(--tx3);cursor:pointer;font-size:13px;font-weight:700;padding:11px 0;transition:all .15s;}
 .km-tab.act{color:var(--pul);border-bottom:2px solid var(--pu);}
 .km-content{padding:14px 14px 80px;}
 .bnav{display:none;position:fixed;bottom:0;left:0;right:0;width:100%;background:var(--s1);border-top:1px solid var(--b1);z-index:50;}
@@ -230,7 +282,6 @@ button,input,select,textarea{font-family:var(--f);-webkit-appearance:none;}
 .dev-admin{background:rgba(124,111,247,.15);color:var(--pul);}.dev-user{background:rgba(45,212,167,.12);color:var(--te);}
 .set-row{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--b1);}
 .set-row:last-child{border-bottom:none;}.set-label{font-size:13px;font-weight:600;}.set-sub{font-size:11px;color:var(--tx3);margin-top:2px;}
-/* summary report */
 .rep-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;margin-top:12px;}
 .rep-card{background:var(--s2);border:1px solid var(--b1);border-radius:var(--rl);overflow:hidden;}
 .rep-head{padding:10px 14px;background:var(--s3);display:flex;justify-content:space-between;align-items:center;}
@@ -245,11 +296,13 @@ button,input,select,textarea{font-family:var(--f);-webkit-appearance:none;}
   .bnav{display:-webkit-flex;display:flex;}
   .content{padding:14px 14px 90px;}.topbar{padding:11px 14px;}
   .dash-grid{grid-template-columns:1fr;}.store-grid{grid-template-columns:repeat(auto-fill,minmax(140px,1fr));}
+  .rep-grid{grid-template-columns:1fr;}
 }
 @media print{.sidebar,.bnav,.topbar,.no-print{display:none!important;}.main{height:auto;overflow:visible;}body{background:#fff!important;color:#000!important;}}
 `;
 
-/* ─── ProfilePicker ───────────────────────────────────────────────────────── */
+/* ─── Static sub-components (outside WattsHub — not recreated on render) ─── */
+
 function ProfilePicker({kids,onSelectKid,onSelectParent}){
   return(
     <div className="picker-wrap">
@@ -273,7 +326,6 @@ function ProfilePicker({kids,onSelectKid,onSelectParent}){
   );
 }
 
-/* ─── PINScreen ───────────────────────────────────────────────────────────── */
 async function sha256(str){const buf=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(str));return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");}
 function PINScreen({mode,onSuccess,onBack}){
   const[pin,setPin]=useState("");const[err,setErr]=useState("");
@@ -288,7 +340,7 @@ function PINScreen({mode,onSuccess,onBack}){
         else{setErr("PINs don't match");setPin("");setNewPin("");setStep("enter");}
       }else{
         const stored=localStorage.getItem("wh_pin");
-        sha256(next).then(h=>{if(h===stored){onSuccess();}else{setErr("Wrong PIN");setPin("");}});
+        sha256(next).then(h=>{if(h===stored)onSuccess();else{setErr("Wrong PIN");setPin("");}});
       }
     }
   };
@@ -301,7 +353,9 @@ function PINScreen({mode,onSuccess,onBack}){
       <div className="pin-pad">
         {[1,2,3,4,5,6,7,8,9,"",0,"⌫"].map((d,i)=>(
           <button key={i} className="pin-btn" style={d===""?{visibility:"hidden"}:{}}
-            onClick={()=>{if(d==="⌫"){setPin(p=>p.slice(0,-1));setErr("");}else{append(String(d));}}}>{d}</button>
+            onClick={()=>{if(d==="⌫"){setPin(p=>p.slice(0,-1));setErr("");}else append(String(d));}}>
+            {d}
+          </button>
         ))}
       </div>
       {onBack&&<button className="btn btn-g btn-sm" style={{marginTop:4}} onClick={onBack}>← Back</button>}
@@ -309,14 +363,13 @@ function PINScreen({mode,onSuccess,onBack}){
   );
 }
 
-/* ─── FirebaseCfgModal ────────────────────────────────────────────────────── */
 function FirebaseCfgModal({onSave,onSkip}){
   const[cfg,setCfg]=useState({apiKey:"",authDomain:"",databaseURL:"",projectId:"",storageBucket:"",messagingSenderId:"",appId:""});
   const fields=[{k:"apiKey",lbl:"API Key"},{k:"authDomain",lbl:"Auth Domain",hint:"project.firebaseapp.com"},{k:"databaseURL",lbl:"Database URL",hint:"https://project-rtdb.firebaseio.com"},{k:"projectId",lbl:"Project ID"},{k:"appId",lbl:"App ID"}];
   return(
     <div className="overlay"><div className="modal">
       <div className="modal-h">🔥 Connect Firebase</div>
-      <p style={{fontSize:12,color:"var(--tx3)",marginBottom:16,lineHeight:1.5}}>Firebase Console → Project Settings → Your apps → Web → Config. Enable Realtime Database and Anonymous Auth.</p>
+      <p style={{fontSize:12,color:"var(--tx3)",marginBottom:16,lineHeight:1.6}}>Firebase Console → Project Settings → Your apps → Web → Config. Enable Realtime Database and Anonymous Auth.</p>
       {fields.map(f=>(
         <div className="fg" key={f.k}><label className="fl">{f.lbl}</label>
           <input className="fi" placeholder={f.hint||f.lbl} value={cfg[f.k]} onChange={e=>setCfg(c=>({...c,[f.k]:e.target.value}))}/></div>
@@ -329,7 +382,6 @@ function FirebaseCfgModal({onSave,onSkip}){
   );
 }
 
-/* ─── FocusTimerModal ─────────────────────────────────────────────────────── */
 function FocusTimerModal({onClose,kids,onAwardXp}){
   const DURATION=25*60;
   const[secs,setSecs]=useState(DURATION);const[running,setRunning]=useState(false);
@@ -359,8 +411,7 @@ function FocusTimerModal({onClose,kids,onAwardXp}){
             <select className="fi" value={selKid} onChange={e=>setSelKid(e.target.value)}>
               <option value="">No bonus</option>
               {kids.map(k=><option key={k.id} value={k.id}>{k.name}</option>)}
-            </select>
-          </div>
+            </select></div>
         </div>
       ):(
         <div style={{display:"flex",gap:8,justifyContent:"center",marginBottom:16}}>
@@ -380,21 +431,18 @@ function FocusTimerModal({onClose,kids,onAwardXp}){
    MAIN APP
 ═══════════════════════════════════════════════════════════════════════════ */
 export default function WattsHub(){
-  /* ── Firebase ── */
   const[fbCfg,setFbCfg]=useState(()=>{
     const keys=["wh_fbcfg","wh3_cfg","wh_fb","wh_firebase","wattshub_cfg"];
     try{for(const k of keys){const s=localStorage.getItem(k);if(s){const p=JSON.parse(s);if(p?.apiKey&&p?.databaseURL)return p;}}}catch{}
     return null;
   });
   const[showCfg,setShowCfg]=useState(false);
-  const{ready,uid,db,fnRef,listen,write,merge,del}=useFirebase(fbCfg);
-  /* FIX: action helpers always call through fnRef.current so they get the
-     latest write/merge/del even after Firebase finishes async init         */
+  const{ready,uid,db,online,fnRef,listen,write,merge,del,atomic}=useFirebase(fbCfg);
   const fw=(path,val)=>fnRef.current.write(path,val);
   const fm=(path,val)=>fnRef.current.merge(path,val);
   const fd=(path)=>fnRef.current.del(path);
+  const fa=(updates)=>fnRef.current.atomic(updates);
 
-  /* ── Core state ── */
   const[kids,setKids]=useState(KIDS0);
   const[chores,setChores]=useState(CHORES0);
   const[comps,setComps]=useState({});
@@ -406,8 +454,9 @@ export default function WattsHub(){
   const[summerWeekly,setSummerWeekly]=useState({});
   const[summerMonthly,setSummerMonthly]=useState({});
   const[summerSessions,setSummerSessions]=useState({});
+  /* FIX: optimistic pending map — {`choreId_kidId`: true} for instant UI feedback */
+  const[optimistic,setOptimistic]=useState({});
 
-  /* ── UI state ── */
   const[view,setView]=useState("dashboard");
   const[activeKid,setActiveKid]=useState(null);
   const[parentMode,setParentMode]=useState(false);
@@ -421,7 +470,16 @@ export default function WattsHub(){
 
   const{toasts,add:toast}=useToasts();
 
-  /* ── Firebase listeners ── */
+  /* FIX: reset selDate at midnight if stale */
+  useEffect(()=>{
+    const t=today();
+    if(selDate<t)setSelDate(t);
+    const ms=new Date().setHours(24,0,0,0)-Date.now();
+    const timer=setTimeout(()=>setSelDate(today()),ms);
+    return()=>clearTimeout(timer);
+  },[selDate]);
+
+  /* Firebase listeners */
   useEffect(()=>{
     if(!ready)return;
     const u=[
@@ -440,69 +498,95 @@ export default function WattsHub(){
     return()=>u.forEach(f=>f&&f());
   },[ready,listen]);
 
-  /* Seed on first connect */
+  /* FIX: seed only fires once, unsubscribes after check, checks chores not kids */
   useEffect(()=>{
     if(!ready)return;
-    listen("wh/kids",v=>{
-      if(!v){KIDS0.forEach(k=>fw(`wh/kids/${k.id}`,k));CHORES0.forEach(c=>fw(`wh/chores/${c.id}`,c));}
-    });
+    const timer=setTimeout(()=>{
+      const unsub=listen("wh/chores",v=>{
+        unsub&&unsub();
+        if(!v){
+          const ukids=listen("wh/kids",kv=>{
+            ukids&&ukids();
+            if(!kv)KIDS0.forEach(k=>fw(`wh/kids/${k.id}`,k));
+            CHORES0.forEach(c=>fw(`wh/chores/${c.id}`,c));
+          });
+        }
+      });
+    },1500);
+    return()=>clearTimeout(timer);
   },[ready]);
 
-  /* ── Helpers ── */
-  const kidById=id=>kids.find(k=>k.id===id);
+  /* Helpers */
+  const kidById=useCallback(id=>kids.find(k=>k.id===id),[kids]);
   const getComp=(dk,cId,kId)=>comps[dk]?.[ckey(cId,kId)]||null;
   const isScheduled=(c,ds)=>{
     if(c.scheduleType==="daily")return true;
-    if(c.scheduleType==="weekly"){
-      const dow=parseDate(ds).toLocaleDateString("en-US",{weekday:"short"});
-      return(c.scheduleDays||[]).includes(dow);
-    }
+    if(c.scheduleType==="weekly"){const dow=parseDate(ds).toLocaleDateString("en-US",{weekday:"short"});return(c.scheduleDays||[]).includes(dow);}
     return true;
   };
   const pendCount=useMemo(()=>{
-    let n=0;
-    chores.forEach(c=>{if(!c.requiresApproval)return;kids.forEach(k=>{if(getComp(today(),c.id,k.id)?.status==="pending")n++;});});
-    return n;
+    let n=0;chores.forEach(c=>{if(!c.requiresApproval)return;kids.forEach(k=>{if(getComp(today(),c.id,k.id)?.status==="pending")n++;});});return n;
   },[chores,kids,comps]);
   const isAdmin=uid&&allowedUids[uid]?.role==="admin";
   const hasPIN=!!localStorage.getItem("wh_pin");
 
-  /* ── Actions — all use fw/fm/fd which route through fnRef ── */
+  /* ── Actions ── */
   async function completeChore(choreId,kidId){
     const chore=chores.find(c=>c.id===choreId);
     const kid=kidById(kidId);
     if(!chore||!kid)return;
-    const dk=selDate;
+    const dk=today();
     const existing=getComp(dk,choreId,kidId);
     if(existing?.status==="approved"||existing?.status==="done")return;
+    const optKey=ckey(choreId,kidId);
+    /* FIX: optimistic UI — show checkmark immediately */
+    setOptimistic(o=>({...o,[optKey]:true}));
     const status=chore.requiresApproval?"pending":"done";
-    const xpAmt=Math.round((chore.xp||10)*(dk!==today()?0.75:1));
-    await fm(`wh/comps/${dk}/${ckey(choreId,kidId)}`,{status,ts:Date.now(),choreId,kidId,xp:xpAmt});
+    const xpAmt=chore.xp||10;
+    /* FIX: atomic write — comp + XP + weekXP + txlog in ONE Firebase call */
+    const updates={};
+    updates[`wh/comps/${dk}/${ckey(choreId,kidId)}`]={status,ts:Date.now(),choreId,kidId,xp:xpAmt};
     if(status==="done"){
-      await fm(`wh/kids/${kidId}`,{xp:(kid.xp||0)+xpAmt,lastActiveDate:dk});
+      updates[`wh/kids/${kidId}/xp`]=(kid.xp||0)+xpAmt;
+      updates[`wh/kids/${kidId}/lastActiveDate`]=dk;
       const wk=weekKey(dk);
-      await fw(`wh/weekXp/${wk}/${kidId}`,(weekXp[wk]?.[kidId]||0)+xpAmt);
-      await fw(`wh/txlog/tx_${Date.now()}_${kidId}`,{id:`tx_${Date.now()}`,kidId,type:"chore",xp:xpAmt,cents:0,desc:chore.title,ts:Date.now()});
-      toast(`+${xpAmt} XP for ${kid.name}!`,"success");
-    }else{toast(`${chore.title} submitted for approval`,"info");}
+      updates[`wh/weekXp/${wk}/${kidId}`]=(weekXp[wk]?.[kidId]||0)+xpAmt;
+      updates[`wh/txlog/${txId(kidId)}`]={kidId,type:"chore",xp:xpAmt,cents:0,desc:chore.title,ts:Date.now()};
+    }
+    try{
+      await fa(updates);
+      if(status==="done")toast(`+${xpAmt} XP for ${kid.name}!`,"success");
+      else toast(`${chore.title} submitted for approval`,"info");
+    }catch(e){
+      toast("Failed to save — check connection","err");
+    }finally{
+      setOptimistic(o=>{const n={...o};delete n[optKey];return n;});
+    }
   }
 
   async function approveComp(dk,choreId,kidId){
     const chore=chores.find(c=>c.id===choreId);
     const kid=kidById(kidId);if(!chore||!kid)return;
     const comp=getComp(dk,choreId,kidId);if(!comp)return;
-    await fm(`wh/comps/${dk}/${ckey(choreId,kidId)}`,{status:"approved",approvedAt:Date.now()});
     const xpAmt=comp.xp||chore.xp||10;
-    await fm(`wh/kids/${kidId}`,{xp:(kid.xp||0)+xpAmt});
-    await fw(`wh/weekXp/${weekKey(dk)}/${kidId}`,(weekXp[weekKey(dk)]?.[kidId]||0)+xpAmt);
-    await fw(`wh/txlog/tx_${Date.now()}_${kidId}`,{id:`tx_${Date.now()}`,kidId,type:"chore",xp:xpAmt,cents:0,desc:chore.title+" (approved)",ts:Date.now()});
+    const wk=weekKey(dk);
+    const updates={};
+    updates[`wh/comps/${dk}/${ckey(choreId,kidId)}/status`]="approved";
+    updates[`wh/comps/${dk}/${ckey(choreId,kidId)}/approvedAt`]=Date.now();
+    updates[`wh/kids/${kidId}/xp`]=(kid.xp||0)+xpAmt;
+    updates[`wh/weekXp/${wk}/${kidId}`]=(weekXp[wk]?.[kidId]||0)+xpAmt;
+    updates[`wh/txlog/${txId(kidId)}`]={kidId,type:"chore",xp:xpAmt,cents:0,desc:chore.title+" (approved)",ts:Date.now()};
+    await fa(updates);
     toast(`Approved! +${xpAmt} XP for ${kid.name}`,"success");
   }
 
   async function awardXp(kidId,amount){
     const kid=kidById(kidId);if(!kid)return;
-    await fm(`wh/kids/${kidId}`,{xp:(kid.xp||0)+amount});
-    await fw(`wh/weekXp/${weekKey(today())}/${kidId}`,(weekXp[weekKey(today())]?.[kidId]||0)+amount);
+    const wk=weekKey(today());
+    await fa({
+      [`wh/kids/${kidId}/xp`]:(kid.xp||0)+amount,
+      [`wh/weekXp/${wk}/${kidId}`]:(weekXp[wk]?.[kidId]||0)+amount,
+    });
     toast(`+${amount} XP for ${kid.name}`,"success");
   }
 
@@ -512,10 +596,7 @@ export default function WattsHub(){
     toast(data.id?"Chore updated ✓":"Chore added ✓","success");
   }
 
-  async function deleteChore(id){
-    await fd(`wh/chores/${id}`);
-    toast("Chore deleted","warn");
-  }
+  async function deleteChore(id){await fd(`wh/chores/${id}`);toast("Chore deleted","warn");}
 
   async function saveKid(data){
     const id=data.id||`k${Date.now()}`;
@@ -524,8 +605,7 @@ export default function WattsHub(){
   }
 
   async function saveStoreItem(data){
-    const id=`si${Date.now()}`;
-    await fw(`wh/store/${id}`,{...data,id});
+    await fw(`wh/store/si${Date.now()}`,{...data,id:`si${Date.now()}`});
     toast("Store item added","success");
   }
 
@@ -533,13 +613,14 @@ export default function WattsHub(){
     if(!activeKid){toast("Select a kid first","warn");return;}
     const kid=kidById(activeKid);
     if((kid?.balanceCents||0)<item.priceCents){toast("Not enough coins","warn");return;}
-    await fm(`wh/kids/${activeKid}`,{balanceCents:(kid.balanceCents||0)-item.priceCents});
-    const txId=`tx_${Date.now()}_${activeKid}`;
-    await fw(`wh/txlog/${txId}`,{id:txId,kidId:activeKid,type:"purchase",xp:0,cents:-item.priceCents,desc:item.name,ts:Date.now()});
+    const id=txId(activeKid);
+    await fa({
+      [`wh/kids/${activeKid}/balanceCents`]:(kid.balanceCents||0)-item.priceCents,
+      [`wh/txlog/${id}`]:{id,kidId:activeKid,type:"purchase",xp:0,cents:-item.priceCents,desc:item.name,ts:Date.now()},
+    });
     toast(`Purchased: ${item.name}!`,"success");
   }
 
-  /* ── Auth helpers ── */
   function saveCfg(cfg){
     ["wh_fbcfg","wh3_cfg"].forEach(k=>localStorage.setItem(k,JSON.stringify(cfg)));
     setFbCfg(cfg);setShowCfg(false);
@@ -549,7 +630,6 @@ export default function WattsHub(){
   function enterParentMode(){setParentMode(true);setScreen("app");setView("dashboard");setActiveKid(null);}
   function exitToPicker(){setParentMode(false);setScreen("picker");setActiveKid(null);}
 
-  /* ── vmeta ── */
   const vmeta={
     dashboard:{t:"Dashboard",s:"Family overview"},
     chores:{t:activeKid?`${kidById(activeKid)?.name}'s Chores`:"All Chores",s:selDate===today()?"Today":parseDate(selDate).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"})},
@@ -562,8 +642,7 @@ export default function WattsHub(){
   };
   const vm=vmeta[view]||{t:view,s:""};
 
-  /* ════════════════════════════════ VIEWS ════════════════════════════════ */
-
+  /* ════════ VIEWS ════════ */
   function DashboardView(){
     return(
       <div>
@@ -586,16 +665,16 @@ export default function WattsHub(){
                   <div style={{width:42,height:42,borderRadius:"50%",background:cc.bg,color:cc.tx,fontSize:15,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,flexShrink:0}}>{k.initials}</div>
                   <div style={{flex:1}}>
                     <div className="kname">{k.name}</div>
-                    <div className="kage">Age {k.age} · Level {lvl}</div>
+                    <div className="kage">Age {k.age} · Level {lvl} · {fmtDollars(k.balanceCents||0)}</div>
                   </div>
                   {sk?.currentStreak>0&&<div style={{fontSize:12,fontWeight:800,color:sk.currentStreak>=5?"var(--am)":"var(--pul)"}}>{sk.currentStreak>=5?"🔥":"⚡"}{sk.currentStreak}</div>}
                 </div>
                 <div>
-                  <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"var(--tx3)",marginBottom:4}}><span>XP {xp%100}/100</span><span>Level {lvl}</span></div>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"var(--tx3)",marginBottom:4}}><span>XP {xp%100}/100 → Level {lvl+1}</span><span style={{color:cc.ring}}>{Math.round(pct)}%</span></div>
                   <div style={{background:"var(--s4)",borderRadius:4,height:6,overflow:"hidden"}}><div style={{width:`${pct}%`,height:"100%",background:cc.ring,borderRadius:4,transition:"width .4s"}}/></div>
                 </div>
                 <div>
-                  <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"var(--tx3)",marginBottom:4}}><span>Weekly {wxp}/{goal} XP</span><span style={{color:gpct>=100?"var(--te)":"var(--tx3)"}}>{gpct}%</span></div>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"var(--tx3)",marginBottom:4}}><span>Weekly goal {wxp}/{goal} XP</span><span style={{color:gpct>=100?"var(--te)":"var(--tx3)"}}>{gpct}%</span></div>
                   <div style={{background:"var(--s4)",borderRadius:4,height:5,overflow:"hidden"}}><div style={{width:`${gpct}%`,height:"100%",background:gpct>=100?"var(--te)":cc.ring,borderRadius:4,transition:"width .4s"}}/></div>
                 </div>
                 {sk&&<div className="chips">
@@ -614,7 +693,6 @@ export default function WattsHub(){
   function ChoresView(){
     const filtered=chores.filter(c=>(!activeKid||c.assignedTo?.includes(activeKid))&&isScheduled(c,selDate));
     const dateLabel=selDate===today()?"Today":parseDate(selDate).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"});
-    /* FIX: kid mode completion works because we pass isKidMode flag */
     const isKidMode=screen==="kid";
     return(
       <div>
@@ -628,13 +706,13 @@ export default function WattsHub(){
             <div className="ch">Pending Approval</div>
             {chores.filter(c=>c.requiresApproval).flatMap(c=>
               kids.map(k=>{
-                const comp=getComp(selDate,c.id,k.id);
+                const comp=getComp(today(),c.id,k.id);
                 if(comp?.status!=="pending")return null;
                 return(
                   <div key={k.id+c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:"1px solid var(--b1)"}}>
                     <span style={{flex:1,fontSize:13}}><strong>{k.name}</strong> – {c.title}</span>
-                    <button className="btn btn-te btn-sm" onClick={()=>approveComp(selDate,c.id,k.id)}>✓ Approve</button>
-                    <button className="btn btn-co btn-sm" onClick={()=>fd(`wh/comps/${selDate}/${ckey(c.id,k.id)}`)}>✗</button>
+                    <button className="btn btn-te btn-sm" onClick={()=>approveComp(today(),c.id,k.id)}>✓ Approve</button>
+                    <button className="btn btn-co btn-sm" onClick={()=>fd(`wh/comps/${today()}/${ckey(c.id,k.id)}`)}>✗</button>
                   </div>
                 );
               }).filter(Boolean)
@@ -651,27 +729,31 @@ export default function WattsHub(){
             return kidsForChore.map(k=>{
               if(!k)return null;
               const comp=getComp(selDate,c.id,k.id);
+              const optKey=ckey(c.id,k.id);
+              const isOpt=optimistic[optKey];
               const status=comp?.status||"none";
               const cc=COLORS[k.colorIdx]||COLORS[0];
-              /* FIX: allow tap in kid mode (isKidMode) OR when parentMode is off */
-              const canTap=isKidMode||!parentMode;
+              const isDone=status==="done"||status==="approved";
+              const canTap=(isKidMode||!parentMode)&&!isDone&&!isOpt;
               return(
-                <div key={c.id+k.id} className={`ccard${status==="done"||status==="approved"?" done":status==="pending"?" pending":""}`}
+                <div key={c.id+k.id}
+                  className={`ccard${isDone?" done":status==="pending"?" pending":isOpt?" optimistic":""}`}
                   onClick={()=>canTap&&completeChore(c.id,k.id)}>
-                  <div className={`ccheck${status==="done"||status==="approved"?" done":status==="pending"?" pending":""}`}>
-                    {(status==="done"||status==="approved")&&<span style={{fontSize:12,color:"#000"}}>✓</span>}
+                  <div className={`ccheck${isDone?" done":status==="pending"?" pending":isOpt?" optimistic":""}`}>
+                    {isDone&&<span style={{fontSize:12,color:"#000"}}>✓</span>}
                     {status==="pending"&&<span style={{fontSize:10}}>⏳</span>}
+                    {isOpt&&!isDone&&<span style={{fontSize:10,color:"var(--pul)"}}>…</span>}
                   </div>
-                  <div style={{flex:1}}>
+                  <div style={{flex:1,minWidth:0}}>
                     <div className="ctitle">{c.title}</div>
                     {!activeKid&&<div style={{fontSize:11,color:cc.tx,marginTop:1}}>{k.name}</div>}
                   </div>
                   <span className={`cdiff diff-${c.diff||"easy"}`}>{c.diff||"easy"}</span>
                   <span className="cxp">+{c.xp||10} XP</span>
                   {parentMode&&(
-                    <div style={{display:"flex",gap:4}} onClick={e=>e.stopPropagation()}>
+                    <div style={{display:"flex",gap:4,flexShrink:0}} onClick={e=>e.stopPropagation()}>
                       <button className="btn btn-g btn-sm" onClick={()=>{setEditChore({...c});setShowAddChore(true);}}>✏️</button>
-                      <button className="btn btn-co btn-sm" onClick={()=>{if(window.confirm("Delete this chore?"))deleteChore(c.id);}}>🗑</button>
+                      <button className="btn btn-co btn-sm" onClick={()=>{if(window.confirm(`Delete "${c.title}"?`))deleteChore(c.id);}}>🗑</button>
                     </div>
                   )}
                 </div>
@@ -686,25 +768,25 @@ export default function WattsHub(){
   function StoreView(){
     const kid=activeKid?kidById(activeKid):null;
     const balance=kid?(kid.balanceCents||0):null;
-    const defaultItems=[
-      {id:"si_d1",name:"30 min screen time",emoji:"📱",priceCents:50},
-      {id:"si_d2",name:"Pick dinner",emoji:"🍕",priceCents:100},
-      {id:"si_d3",name:"Stay up 30 min",emoji:"🌙",priceCents:80},
-      {id:"si_d4",name:"Skip one chore",emoji:"🎯",priceCents:150},
-      {id:"si_d5",name:"Movie night pick",emoji:"🎬",priceCents:120},
-      {id:"si_d6",name:"Cash out $1",emoji:"💵",priceCents:100},
-    ];
-    const items=[...defaultItems,...storeItems];
+    const items=[...STORE_DEFAULTS,...storeItems];
     return(
       <div>
-        {balance!==null&&<div style={{fontSize:13,color:"var(--am)",fontWeight:800,marginBottom:14}}>💰 Balance: {fmtDollars(balance)}</div>}
-        {!activeKid&&<div style={{fontSize:12,color:"var(--tx3)",marginBottom:12}}>Select a kid to buy items.</div>}
+        {balance!==null&&(
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+            <div style={{fontSize:13,color:"var(--am)",fontWeight:800}}>💰 Balance: {fmtDollars(balance)}</div>
+            <div style={{fontSize:11,color:"var(--tx3)"}}>Tap an item to buy</div>
+          </div>
+        )}
+        {!activeKid&&<div style={{background:"var(--s2)",border:"1px solid var(--b1)",borderRadius:10,padding:"10px 14px",fontSize:12,color:"var(--tx3)",marginBottom:14}}>👆 Select a kid from the sidebar to buy items.</div>}
         <div className="store-grid">
           {items.map(item=>(
-            <div key={item.id} className={`sitem${balance!==null&&balance>=item.priceCents?" can-afford":""}`} onClick={()=>buyItem(item)}>
+            <div key={item.id}
+              className={`sitem${balance!==null&&balance>=item.priceCents?" can-afford":""}`}
+              onClick={()=>activeKid&&buyItem(item)}>
               <div className="sitem-em">{item.emoji}</div>
               <div className="sitem-name">{item.name}</div>
               <div className="sitem-price">{fmtDollars(item.priceCents)}</div>
+              {balance!==null&&<div style={{fontSize:10,color:balance>=item.priceCents?"var(--te)":"var(--co)"}}>{balance>=item.priceCents?"✓ Can afford":"Need more"}</div>}
             </div>
           ))}
         </div>
@@ -713,7 +795,6 @@ export default function WattsHub(){
   }
 
   function MoneyView(){
-    const buckets=[{key:"save",label:"Save",color:"var(--te)",pct:50},{key:"spend",label:"Spend",color:"var(--am)",pct:40},{key:"share",label:"Share",color:"var(--pk)",pct:10}];
     return(
       <div>
         <div className="dash-grid">
@@ -723,14 +804,18 @@ export default function WattsHub(){
               <div key={k.id} className="card">
                 <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
                   <div style={{width:36,height:36,borderRadius:"50%",background:cc.bg,color:cc.tx,fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900}}>{k.initials}</div>
-                  <div><div style={{fontSize:14,fontWeight:800}}>{k.name}</div><div style={{fontSize:13,color:"var(--am)",fontWeight:800}}>{fmtDollars(bal)}</div></div>
+                  <div>
+                    <div style={{fontSize:14,fontWeight:800}}>{k.name}</div>
+                    <div style={{fontSize:16,color:"var(--am)",fontWeight:900}}>{fmtDollars(bal)}</div>
+                  </div>
                 </div>
                 <div className="mbar-wrap">
-                  {buckets.map(b=>(
+                  {MONEY_BUCKETS.map(b=>(
                     <div key={b.key} className="mbar-row">
                       <div className="mbar-label">{b.label}</div>
                       <div className="mbar-track"><div className="mbar-fill" style={{width:`${b.pct}%`,background:b.color}}/></div>
-                      <div className="mbar-val">{fmtDollars(bal*(b.pct/100))}</div>
+                      {/* FIX: Math.round prevents floating-point display artifacts */}
+                      <div className="mbar-val">{fmtDollars(Math.round(bal*(b.pct/100)))}</div>
                     </div>
                   ))}
                 </div>
@@ -744,11 +829,11 @@ export default function WattsHub(){
             {txLog.slice(0,20).map(tx=>{
               const k=kidById(tx.kidId);
               return(
-                <div key={tx.id} className="alog-row">
+                <div key={tx.id||tx.ts} className="alog-row">
                   <div className="alog-time">{new Date(tx.ts).toLocaleDateString("en-US",{month:"short",day:"numeric"})}</div>
                   <div className="alog-msg"><strong>{k?.name||"?"}</strong> – {tx.desc}</div>
                   {tx.xp>0&&<div className="alog-xp">+{tx.xp} XP</div>}
-                  {tx.cents!==0&&<div style={{fontSize:11,fontWeight:800,color:tx.cents>0?"var(--te)":"var(--co)"}}>{tx.cents>0?"+":""}{fmtDollars(Math.abs(tx.cents))}</div>}
+                  {!!tx.cents&&<div style={{fontSize:11,fontWeight:800,color:tx.cents>0?"var(--te)":"var(--co)",flexShrink:0}}>{tx.cents>0?"+":""}{fmtDollars(Math.abs(tx.cents))}</div>}
                 </div>
               );
             })}
@@ -762,12 +847,12 @@ export default function WattsHub(){
   function ActivityView(){
     return(
       <div className="card">
-        <div className="ch">Activity log</div>
+        <div className="ch">Activity log — {txLog.length} entries</div>
         <div className="alog">
-          {txLog.slice(0,50).map(tx=>{
+          {txLog.slice(0,60).map(tx=>{
             const k=kidById(tx.kidId);
             return(
-              <div key={tx.id} className="alog-row">
+              <div key={tx.id||tx.ts} className="alog-row">
                 <div className="alog-time">{new Date(tx.ts).toLocaleDateString("en-US",{month:"short",day:"numeric"})} {new Date(tx.ts).toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})}</div>
                 <div className="alog-msg"><strong>{k?.name||"?"}</strong> – {tx.desc}</div>
                 {tx.xp>0&&<div className="alog-xp">+{tx.xp} XP</div>}
@@ -786,20 +871,25 @@ export default function WattsHub(){
         <div className="card">
           <div className="ch">Your device</div>
           <div className="dev-card">
-            <div style={{flex:1}}><div style={{fontSize:12,fontWeight:700,marginBottom:3}}>This device UID</div><div className="dev-uid">{uid||"Not signed in"}</div></div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:12,fontWeight:700,marginBottom:3}}>This device UID</div>
+              <div className="dev-uid">{uid||"Not signed in"}</div>
+            </div>
             <div className={`dev-role ${isAdmin?"dev-admin":"dev-user"}`}>{isAdmin?"admin":"user"}</div>
           </div>
-          {!isAdmin&&<div style={{fontSize:12,color:"var(--tx3)",marginTop:10,lineHeight:1.5}}>To get admin: copy UID above → Firebase Console → Realtime Database → <code>wh/allowedUids/{"{your-uid}"}</code> → add <code>role: "admin"</code></div>}
+          {!isAdmin&&<div style={{fontSize:12,color:"var(--tx3)",marginTop:10,lineHeight:1.6}}>
+            To get admin access: copy your UID above → Firebase Console → Realtime Database → <code>wh/allowedUids/&#123;your-uid&#125;</code> → add <code>role: "admin"</code>
+          </div>}
         </div>
         <div className="card" style={{marginTop:12}}>
-          <div className="ch">Allowed devices</div>
+          <div className="ch">Allowed devices ({Object.keys(allowedUids).length})</div>
           {Object.entries(allowedUids).map(([id,data])=>(
             <div key={id} className="dev-card">
               <div className="dev-uid">{id}</div>
               <div className={`dev-role ${data.role==="admin"?"dev-admin":"dev-user"}`}>{data.role||"user"}</div>
             </div>
           ))}
-          {Object.keys(allowedUids).length===0&&<div style={{color:"var(--tx3)",fontSize:13,padding:"8px 0"}}>No devices yet.</div>}
+          {Object.keys(allowedUids).length===0&&<div style={{color:"var(--tx3)",fontSize:13,padding:"8px 0"}}>No devices configured yet.</div>}
         </div>
       </div>
     );
@@ -808,16 +898,30 @@ export default function WattsHub(){
   function SettingsView(){
     return(
       <div className="card">
-        <div className="set-row"><div><div className="set-label">Firebase</div><div className="set-sub">{ready?"🟢 Connected":"🔴 Demo mode"}</div></div><button className="btn btn-g btn-sm" onClick={()=>setShowCfg(true)}>Configure</button></div>
-        <div className="set-row"><div><div className="set-label">Parent PIN</div><div className="set-sub">{hasPIN?"PIN set":"No PIN set"}</div></div><button className="btn btn-g btn-sm" onClick={()=>setScreen("pin-set")}>{hasPIN?"Change PIN":"Set PIN"}</button></div>
-        <div className="set-row"><div><div className="set-label">Summer program</div><div className="set-sub">10 XP/session · Mon–Thu · Streak bonus at 5 days</div></div><button className="btn btn-g btn-sm" onClick={()=>setView("summer")}>View</button></div>
-        <div className="set-row"><div><div className="set-label">Focus timer</div><div className="set-sub">25-min Pomodoro with XP bonus</div></div><button className="btn btn-g btn-sm" onClick={()=>setShowFocusTimer(true)}>Start</button></div>
-        <div className="set-row"><div><div className="set-label">Devices</div><div className="set-sub">Manage access & UIDs</div></div><button className="btn btn-g btn-sm" onClick={()=>setView("devices")}>View</button></div>
+        <div className="set-row">
+          <div><div className="set-label">Firebase</div><div className="set-sub">{ready?"🟢 Connected":"🔴 Demo mode"}{!online&&ready?" · ⚠️ Offline":""}</div></div>
+          <button className="btn btn-g btn-sm" onClick={()=>setShowCfg(true)}>Configure</button>
+        </div>
+        <div className="set-row">
+          <div><div className="set-label">Parent PIN</div><div className="set-sub">{hasPIN?"PIN is set — tap to change":"No PIN set"}</div></div>
+          <button className="btn btn-g btn-sm" onClick={()=>setScreen("pin-set")}>{hasPIN?"Change":"Set PIN"}</button>
+        </div>
+        <div className="set-row">
+          <div><div className="set-label">Summer program</div><div className="set-sub">Mon–Thu · 10 XP/session · 5-day streak bonus</div></div>
+          <button className="btn btn-g btn-sm" onClick={()=>setView("summer")}>View</button>
+        </div>
+        <div className="set-row">
+          <div><div className="set-label">Focus timer</div><div className="set-sub">25-min Pomodoro with XP bonus</div></div>
+          <button className="btn btn-g btn-sm" onClick={()=>setShowFocusTimer(true)}>Start</button>
+        </div>
+        <div className="set-row">
+          <div><div className="set-label">Devices & access</div><div className="set-sub">Manage allowed UIDs</div></div>
+          <button className="btn btn-g btn-sm" onClick={()=>setView("devices")}>View</button>
+        </div>
       </div>
     );
   }
 
-  /* ── ChoreModal — FIX: uses key prop to force remount when editChore changes ── */
   function ChoreModal({initialData,onClose}){
     const blank={title:"",diff:"easy",scheduleType:"daily",scheduleDays:[],assignedTo:[],requiresApproval:false,xp:10};
     const[form,setForm]=useState(initialData||blank);
@@ -825,46 +929,45 @@ export default function WattsHub(){
     const toggleDay=d=>setForm(f=>({...f,scheduleDays:f.scheduleDays?.includes(d)?f.scheduleDays.filter(x=>x!==d):[...(f.scheduleDays||[]),d]}));
     const toggleKid=id=>setForm(f=>({...f,assignedTo:f.assignedTo?.includes(id)?f.assignedTo.filter(x=>x!==id):[...(f.assignedTo||[]),id]}));
     return(
-      <div className="overlay" onClick={onClose}>
-        <div className="modal" onClick={e=>e.stopPropagation()}>
-          <div className="modal-h">{initialData?"Edit Chore":"Add Chore"}</div>
-          <div className="fg"><label className="fl">Title</label><input className="fi" value={form.title} onChange={e=>setForm(f=>({...f,title:e.target.value}))}/></div>
-          <div className="fg"><label className="fl">Difficulty</label>
-            <select className="fi" value={form.diff} onChange={e=>setForm(f=>({...f,diff:e.target.value}))}>
-              <option value="easy">Easy (+10 XP)</option><option value="medium">Medium (+20 XP)</option><option value="hard">Hard (+35 XP)</option>
-            </select>
-          </div>
-          <div className="fg"><label className="fl">XP reward</label><input className="fi" type="number" min="1" max="500" value={form.xp||10} onChange={e=>setForm(f=>({...f,xp:+e.target.value}))}/></div>
-          <div className="fg"><label className="fl">Schedule</label>
-            <select className="fi" value={form.scheduleType} onChange={e=>setForm(f=>({...f,scheduleType:e.target.value}))}>
-              <option value="daily">Every day</option><option value="weekly">Specific days</option>
-            </select>
-          </div>
-          {form.scheduleType==="weekly"&&(
-            <div className="fg"><label className="fl">Days</label>
-              <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                {days.map(d=><button key={d} className={`btn btn-sm ${form.scheduleDays?.includes(d)?"btn-p":"btn-g"}`} onClick={()=>toggleDay(d)}>{d}</button>)}
-              </div>
-            </div>
-          )}
-          <div className="fg"><label className="fl">Assign to</label>
+      <div className="overlay" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
+        <div className="modal-h">{initialData?"Edit Chore":"Add Chore"}</div>
+        <div className="fg"><label className="fl">Title</label>
+          <input className="fi" value={form.title} placeholder="Chore name" onChange={e=>setForm(f=>({...f,title:e.target.value}))}/></div>
+        <div className="fg"><label className="fl">Difficulty</label>
+          <select className="fi" value={form.diff} onChange={e=>setForm(f=>({...f,diff:e.target.value}))}>
+            <option value="easy">Easy (+10 XP)</option>
+            <option value="medium">Medium (+20 XP)</option>
+            <option value="hard">Hard (+35 XP)</option>
+          </select></div>
+        <div className="fg"><label className="fl">XP reward</label>
+          <input className="fi" type="number" min="1" max="500" value={form.xp||10} onChange={e=>setForm(f=>({...f,xp:+e.target.value}))}/></div>
+        <div className="fg"><label className="fl">Schedule</label>
+          <select className="fi" value={form.scheduleType} onChange={e=>setForm(f=>({...f,scheduleType:e.target.value}))}>
+            <option value="daily">Every day</option>
+            <option value="weekly">Specific days</option>
+          </select></div>
+        {form.scheduleType==="weekly"&&(
+          <div className="fg"><label className="fl">Days</label>
             <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-              {kids.map(k=><button key={k.id} className={`btn btn-sm ${form.assignedTo?.includes(k.id)?"btn-p":"btn-g"}`} onClick={()=>toggleKid(k.id)}>{k.name}</button>)}
-            </div>
-          </div>
-          <div className="fg" style={{flexDirection:"row",alignItems:"center",justifyContent:"space-between"}}>
-            <label className="fl">Requires approval</label>
-            <label className="sw"><input type="checkbox" checked={!!form.requiresApproval} onChange={e=>setForm(f=>({...f,requiresApproval:e.target.checked}))}/><div className="sw-tr"/><div className="sw-th"/></label>
-          </div>
-          <div className="fax">
-            {initialData&&<button className="btn btn-co" onClick={()=>{deleteChore(initialData.id);onClose();}}>Delete</button>}
-            <button className="btn btn-g" onClick={onClose}>Cancel</button>
-            <button className="btn btn-p" onClick={()=>{if(!form.title.trim())return;saveChore(form);onClose();}}>
-              {initialData?"Save changes":"Add chore"}
-            </button>
-          </div>
+              {days.map(d=><button key={d} className={`btn btn-sm ${form.scheduleDays?.includes(d)?"btn-p":"btn-g"}`} onClick={()=>toggleDay(d)}>{d}</button>)}
+            </div></div>
+        )}
+        <div className="fg"><label className="fl">Assign to</label>
+          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+            {kids.map(k=><button key={k.id} className={`btn btn-sm ${form.assignedTo?.includes(k.id)?"btn-p":"btn-g"}`} onClick={()=>toggleKid(k.id)}>{k.name}</button>)}
+          </div></div>
+        <div className="fg" style={{flexDirection:"row",alignItems:"center",justifyContent:"space-between"}}>
+          <label className="fl">Requires parent approval</label>
+          <label className="sw"><input type="checkbox" checked={!!form.requiresApproval} onChange={e=>setForm(f=>({...f,requiresApproval:e.target.checked}))}/><div className="sw-tr"/><div className="sw-th"/></label>
         </div>
-      </div>
+        <div className="fax">
+          {initialData&&<button className="btn btn-co" onClick={()=>{deleteChore(initialData.id);onClose();}}>Delete</button>}
+          <button className="btn btn-g" onClick={onClose}>Cancel</button>
+          <button className="btn btn-p" onClick={()=>{if(!form.title.trim())return;saveChore(form);onClose();}}>
+            {initialData?"Save changes":"Add chore"}
+          </button>
+        </div>
+      </div></div>
     );
   }
 
@@ -873,12 +976,12 @@ export default function WattsHub(){
     return(
       <div className="overlay" onClick={()=>setShowAddKid(false)}><div className="modal" onClick={e=>e.stopPropagation()}>
         <div className="modal-h">Add Kid</div>
-        <div className="fg"><label className="fl">Name</label><input className="fi" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))}/></div>
-        <div className="fg"><label className="fl">Age</label><input className="fi" type="number" value={form.age} onChange={e=>setForm(f=>({...f,age:e.target.value}))}/></div>
-        <div className="fg"><label className="fl">Initials (2 chars)</label><input className="fi" maxLength={2} value={form.initials} onChange={e=>setForm(f=>({...f,initials:e.target.value.toUpperCase()}))}/></div>
+        <div className="fg"><label className="fl">Name</label><input className="fi" placeholder="First name" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))}/></div>
+        <div className="fg"><label className="fl">Age</label><input className="fi" type="number" min="3" max="21" value={form.age} onChange={e=>setForm(f=>({...f,age:e.target.value}))}/></div>
+        <div className="fg"><label className="fl">Initials (2 chars)</label><input className="fi" maxLength={2} placeholder="TW" value={form.initials} onChange={e=>setForm(f=>({...f,initials:e.target.value.toUpperCase()}))}/></div>
         <div className="fax">
           <button className="btn btn-g" onClick={()=>setShowAddKid(false)}>Cancel</button>
-          <button className="btn btn-p" onClick={()=>{if(!form.name.trim())return;saveKid(form);setShowAddKid(false);}}>Add kid</button>
+          <button className="btn btn-p" onClick={()=>{if(!form.name.trim()||!form.initials.trim())return;saveKid(form);setShowAddKid(false);}}>Add kid</button>
         </div>
       </div></div>
     );
@@ -889,10 +992,9 @@ export default function WattsHub(){
     return(
       <div className="overlay" onClick={()=>setShowAddItem(false)}><div className="modal" onClick={e=>e.stopPropagation()}>
         <div className="modal-h">Add Store Item</div>
-        <div className="fg"><label className="fl">Name</label><input className="fi" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))}/></div>
-        <div className="fg"><label className="fl">Emoji</label><input className="fi" value={form.emoji} onChange={e=>setForm(f=>({...f,emoji:e.target.value}))}/></div>
-        <div className="fg"><label className="fl">Description</label><input className="fi" value={form.desc} onChange={e=>setForm(f=>({...f,desc:e.target.value}))}/></div>
-        <div className="fg"><label className="fl">Price (cents, e.g. 100 = $1.00)</label><input className="fi" type="number" value={form.priceCents} onChange={e=>setForm(f=>({...f,priceCents:+e.target.value}))}/></div>
+        <div className="fg"><label className="fl">Name</label><input className="fi" placeholder="Item name" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))}/></div>
+        <div className="fg"><label className="fl">Emoji icon</label><input className="fi" value={form.emoji} onChange={e=>setForm(f=>({...f,emoji:e.target.value}))}/></div>
+        <div className="fg"><label className="fl">Price (e.g. 100 = $1.00)</label><input className="fi" type="number" min="1" value={form.priceCents} onChange={e=>setForm(f=>({...f,priceCents:+e.target.value}))}/></div>
         <div className="fax">
           <button className="btn btn-g" onClick={()=>setShowAddItem(false)}>Cancel</button>
           <button className="btn btn-p" onClick={()=>{if(!form.name.trim())return;saveStoreItem(form);setShowAddItem(false);}}>Add item</button>
@@ -901,7 +1003,6 @@ export default function WattsHub(){
     );
   }
 
-  /* ── Kid Mode ── */
   function KidModeApp(){
     const kid=kidById(activeKid);
     const[kmTab,setKmTab]=useState("chores");
@@ -911,7 +1012,10 @@ export default function WattsHub(){
       <div className="km-wrap">
         <div className="km-header">
           <div style={{width:40,height:40,borderRadius:"50%",background:cc.bg,color:cc.tx,fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900}}>{kid.initials}</div>
-          <div><div className="km-name">{kid.name}</div><div className="km-sub">Level {Math.floor((kid.xp||0)/100)+1} · {kid.xp||0} XP · {fmtDollars(kid.balanceCents||0)}</div></div>
+          <div>
+            <div className="km-name">{kid.name}</div>
+            <div className="km-sub">Level {Math.floor((kid.xp||0)/100)+1} · {kid.xp||0} XP · {fmtDollars(kid.balanceCents||0)}</div>
+          </div>
           <button className="km-back" onClick={exitToPicker}>← Home</button>
         </div>
         <div className="km-tabs">
@@ -920,39 +1024,31 @@ export default function WattsHub(){
           ))}
         </div>
         <div className="km-content">
-          {kmTab==="chores"&&<div><KidSummerCard db={db} kidId={activeKid} kidName={kid.name}/><ChoresView/></div>}
-          {kmTab==="summer"&&<KidSummerCard db={db} kidId={activeKid} kidName={kid.name}/>}
-          {kmTab==="store"&&<StoreView/>}
-          {kmTab==="money"&&<MoneyView/>}
+          <ErrorBoundary>
+            {kmTab==="chores"&&<div><KidSummerCard db={db} kidId={activeKid} kidName={kid.name}/><ChoresView/></div>}
+            {kmTab==="summer"&&<KidSummerCard db={db} kidId={activeKid} kidName={kid.name}/>}
+            {kmTab==="store"&&<StoreView/>}
+            {kmTab==="money"&&<MoneyView/>}
+          </ErrorBoundary>
         </div>
       </div>
     );
   }
 
   /* ── Screen routing ── */
-  if(screen==="picker") return(<><style>{CSS}</style>{showCfg&&<FirebaseCfgModal onSave={saveCfg} onSkip={()=>setShowCfg(false)}/>}<ProfilePicker kids={kids} onSelectKid={handlePickerKid} onSelectParent={handlePickerParent}/><div className="toasts">{toasts.map(t=><div key={t.id} className={`toast toast-${t.type}`}>{t.msg}</div>)}</div></>);
+  const Toasts=()=><div className="toasts">{toasts.map(t=><div key={t.id} className={`toast toast-${t.type}`}>{t.msg}</div>)}</div>;
+  const OfflineBar=()=>!online&&ready?<div className="offline-bar">⚠️ Offline — changes will sync when reconnected</div>:null;
+
+  if(screen==="picker") return(<><style>{CSS}</style><OfflineBar/>{showCfg&&<FirebaseCfgModal onSave={saveCfg} onSkip={()=>setShowCfg(false)}/>}<ProfilePicker kids={kids} onSelectKid={handlePickerKid} onSelectParent={handlePickerParent}/><Toasts/></>);
   if(screen==="pin-set") return(<><style>{CSS}</style><PINScreen mode="set" onSuccess={enterParentMode} onBack={()=>setScreen("picker")}/></>);
   if(screen==="pin-verify") return(<><style>{CSS}</style><PINScreen mode="verify" onSuccess={enterParentMode} onBack={()=>setScreen("picker")}/></>);
-  if(screen==="kid") return(<><style>{CSS}</style><KidModeApp/><div className="toasts">{toasts.map(t=><div key={t.id} className={`toast toast-${t.type}`}>{t.msg}</div>)}</div></>);
-
-  /* ── Parent app ── */
-  const navItems=[
-    {id:"dashboard",ic:"⬡",lbl:"Dashboard"},
-    {id:"chores",ic:"✓",lbl:"Chores"},
-    {id:"store",ic:"🛍️",lbl:"Store"},
-    {id:"money",ic:"💵",lbl:"Money"},
-    {id:"activity",ic:"↻",lbl:"Activity"},
-    {id:"summer",ic:"☀️",lbl:"Summer"},
-    {id:"devices",ic:"⊞",lbl:"Devices"},
-    {id:"settings",ic:"⚙",lbl:"Settings"},
-  ];
-  const bnav=[{id:"dashboard",ic:"⬡",lbl:"Home"},{id:"chores",ic:"✓",lbl:"Chores"},{id:"summer",ic:"☀️",lbl:"Summer"},{id:"store",ic:"🛍️",lbl:"Store"},{id:"activity",ic:"↻",lbl:"Log"}];
+  if(screen==="kid") return(<><style>{CSS}</style><OfflineBar/><KidModeApp/><Toasts/></>);
 
   return(
     <>
       <style>{CSS}</style>
+      <OfflineBar/>
       {showCfg&&<FirebaseCfgModal onSave={saveCfg} onSkip={()=>setShowCfg(false)}/>}
-      {/* FIX: key forces ChoreModal to remount with fresh state when editChore changes */}
       {showAddChore&&<ChoreModal key={editChore?.id||"new"} initialData={editChore||null} onClose={()=>{setShowAddChore(false);setEditChore(null);}}/>}
       {showAddKid&&<AddKidModal/>}
       {showAddItem&&<AddItemModal/>}
@@ -963,10 +1059,11 @@ export default function WattsHub(){
           <div className="shead">
             <div className="slogo">WattsHub</div>
             {!ready&&<div className="sdemo">DEMO</div>}
+            {ready&&!online&&<div style={{fontSize:9,background:"var(--am)",color:"#000",borderRadius:3,padding:"1px 5px",fontWeight:800}}>OFFLINE</div>}
           </div>
           <div style={{padding:"0 9px",marginBottom:4}}>
             <div className="nlbl">Navigate</div>
-            {navItems.map(n=>(
+            {NAV_ITEMS.map(n=>(
               <button key={n.id} className={`ni${view===n.id?" act":""}`}
                 onClick={()=>{setView(n.id);if(!["chores","store","money"].includes(n.id))setActiveKid(null);}}>
                 <span className="ic">{n.ic}</span>{n.lbl}
@@ -982,6 +1079,7 @@ export default function WattsHub(){
                 onClick={()=>{setActiveKid(k.id);setSelDate(today());setView("chores");}}>
                 <div className="av-xs" style={{width:22,height:22,background:cc.bg,color:cc.tx}}>{k.initials}</div>
                 {k.name}
+                <div style={{marginLeft:"auto",fontSize:10,color:"var(--am)",fontWeight:800}}>{fmtDollars(k.balanceCents||0)}</div>
               </button>
             );})}
             {activeKid&&<button className="kni" style={{color:"var(--tx3)"}} onClick={()=>{setActiveKid(null);setView("dashboard");}}>
@@ -1002,36 +1100,37 @@ export default function WattsHub(){
             <div><div className="tb-t">{vm.t}</div><div className="tb-s">{vm.s}</div></div>
             <div className="tb-r">
               {pendCount>0&&parentMode&&<span style={{background:"rgba(245,166,35,0.13)",color:"var(--am)",fontSize:11,fontWeight:800,padding:"3px 8px",borderRadius:5}}>{pendCount} pending</span>}
-              {ready&&<span style={{background:"rgba(45,212,167,0.09)",color:"var(--te)",fontSize:11,fontWeight:800,padding:"3px 8px",borderRadius:5}}>● Live</span>}
-              {parentMode&&<button className="btn btn-g btn-sm" onClick={()=>setShowFocusTimer(true)}>⏱</button>}
+              {ready&&<span style={{background:online?"rgba(45,212,167,0.09)":"rgba(245,166,35,0.1)",color:online?"var(--te)":"var(--am)",fontSize:11,fontWeight:800,padding:"3px 8px",borderRadius:5}}>{online?"● Live":"⚠ Offline"}</span>}
+              {parentMode&&<button className="btn btn-g btn-sm" onClick={()=>setShowFocusTimer(true)} title="Focus timer">⏱</button>}
               {parentMode&&view==="store"&&<button className="btn btn-g btn-sm" onClick={()=>setShowAddItem(true)}>+ Item</button>}
               {parentMode&&<button className="btn btn-p btn-sm" onClick={()=>{setEditChore(null);setShowAddChore(true);}}>+ Chore</button>}
               {parentMode&&<button className="btn btn-g btn-sm" onClick={()=>setShowAddKid(true)}>+ Kid</button>}
             </div>
           </div>
           <div className="content">
-            {view==="dashboard"&&<DashboardView/>}
-            {view==="chores"&&<ChoresView/>}
-            {view==="store"&&<StoreView/>}
-            {view==="money"&&<MoneyView/>}
-            {view==="activity"&&<ActivityView/>}
-            {view==="summer"&&<SummerView db={db} kids={kids} summerKids={summerKids} summerSessions={summerSessions} weekly={summerWeekly} monthly={summerMonthly}/>}
-            {view==="devices"&&<DevicesView/>}
-            {view==="settings"&&<SettingsView/>}
+            <ErrorBoundary>
+              {view==="dashboard"&&<DashboardView/>}
+              {view==="chores"&&<ChoresView/>}
+              {view==="store"&&<StoreView/>}
+              {view==="money"&&<MoneyView/>}
+              {view==="activity"&&<ActivityView/>}
+              {view==="summer"&&<SummerView db={db} kids={kids} summerKids={summerKids} summerSessions={summerSessions} weekly={summerWeekly} monthly={summerMonthly}/>}
+              {view==="devices"&&<DevicesView/>}
+              {view==="settings"&&<SettingsView/>}
+            </ErrorBoundary>
           </div>
         </main>
       </div>
 
       <nav className="bnav"><div className="bnav-inner">
-        {bnav.map(n=>(
+        {BNAV.map(n=>(
           <button key={n.id} className={`bnav-btn${view===n.id?" act":""}`}
             onClick={()=>{setView(n.id);if(!["chores","store"].includes(n.id))setActiveKid(null);}}>
             <span className="bnav-ic">{n.ic}</span>{n.lbl}
           </button>
         ))}
       </div></nav>
-
-      <div className="toasts">{toasts.map(t=><div key={t.id} className={`toast toast-${t.type}`}>{t.msg}</div>)}</div>
+      <Toasts/>
     </>
   );
 }
