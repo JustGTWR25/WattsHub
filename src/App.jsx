@@ -82,7 +82,8 @@ function useToasts(){
 }
 
 /* ─── Helpers ─────────────────────────────────────────────────────────────── */
-const today=()=>new Date().toISOString().split("T")[0];
+/* FIX: use local date not UTC — toISOString() returns yesterday in US timezones after ~7PM */
+const today=()=>new Date().toLocaleDateString("en-CA");
 const parseDate=s=>new Date(s+"T00:00:00");
 const weekKey=d=>{const dt=parseDate(d),j=new Date(dt.getFullYear(),0,1),wk=Math.ceil(((dt-j)/86400000+j.getDay()+1)/7);return`${dt.getFullYear()}-W${String(wk).padStart(2,"0")}`;}
 const ckey=(cId,kId)=>`${cId}_${kId}`;
@@ -470,14 +471,13 @@ export default function WattsHub(){
 
   const{toasts,add:toast}=useToasts();
 
-  /* FIX: reset selDate at midnight if stale */
+  /* Reset selDate to today at midnight only — no selDate in deps
+     so the back-navigation button actually works. */
   useEffect(()=>{
-    const t=today();
-    if(selDate<t)setSelDate(t);
-    const ms=new Date().setHours(24,0,0,0)-Date.now();
-    const timer=setTimeout(()=>setSelDate(today()),ms);
+    const msUntilMidnight=new Date().setHours(24,0,0,0)-Date.now();
+    const timer=setTimeout(()=>setSelDate(today()),msUntilMidnight);
     return()=>clearTimeout(timer);
-  },[selDate]);
+  },[]);
 
   /* Firebase listeners */
   useEffect(()=>{
@@ -697,9 +697,9 @@ export default function WattsHub(){
     return(
       <div>
         <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
-          <button className="btn btn-g btn-sm" onClick={()=>{const d=new Date(selDate);d.setDate(d.getDate()-1);setSelDate(d.toISOString().split("T")[0]);}}>‹</button>
+          <button className="btn btn-g btn-sm" onClick={()=>{const d=parseDate(selDate);d.setDate(d.getDate()-1);setSelDate(d.toLocaleDateString("en-CA"));}}>‹</button>
           <span style={{flex:1,textAlign:"center",fontSize:13,fontWeight:700}}>{dateLabel}</span>
-          <button className="btn btn-g btn-sm" disabled={selDate===today()} onClick={()=>{const d=new Date(selDate);d.setDate(d.getDate()+1);const s=d.toISOString().split("T")[0];if(s<=today())setSelDate(s);}}>›</button>
+          <button className="btn btn-g btn-sm" disabled={selDate===today()} onClick={()=>{const d=parseDate(selDate);d.setDate(d.getDate()+1);const s=d.toLocaleDateString("en-CA");if(s<=today())setSelDate(s);}}>›</button>
         </div>
         {parentMode&&pendCount>0&&(
           <div className="card" style={{marginBottom:12}}>
