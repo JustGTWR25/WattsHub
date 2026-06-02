@@ -137,7 +137,7 @@ const KIDS0=[
   {id:"k3",name:"Leon",  age:10,colorIdx:2,xp:0,streak:0,initials:"LW",balanceCents:0,goal:{weeklyXpTarget:40,weeklyBonusCents:200,monthlyXpTarget:160,monthlyBonusCents:800,overageRate:10}},
 ];
 const CHORES0=[
-  {id:"c1",title:"Make bed",diff:"easy",scheduleType:"daily",scheduleDays:[],assignedTo:["k1","k2","k3"],requiresApproval:false,xp:10},
+  {id:"c1",title:"Make bed",diff:"easy",scheduleType:"daily",scheduleDays:[],assignedTo:["k1","k2","k3"],requiresApproval:false,xp:5},
   {id:"c2",title:"Clean room",diff:"medium",scheduleType:"daily",scheduleDays:[],assignedTo:["k1","k2","k3"],requiresApproval:false,xp:20},
   {id:"c3",title:"Dishes",diff:"medium",scheduleType:"weekly",scheduleDays:["Mon","Tue","Wed","Thu","Fri"],assignedTo:["k1","k2"],requiresApproval:false,xp:20},
   {id:"c4",title:"Take out trash",diff:"easy",scheduleType:"weekly",scheduleDays:["Sun"],assignedTo:["k3"],requiresApproval:true,xp:15},
@@ -537,23 +537,35 @@ export default function WattsHub(){
     if(!chore||!kid)return;
     const dk=today();
     const existing=getComp(dk,choreId,kidId);
-    if(existing?.status==="approved"||existing?.status==="done")return;
     const optKey=ckey(choreId,kidId);
-    /* FIX: optimistic UI — show checkmark immediately */
     setOptimistic(o=>({...o,[optKey]:true}));
-    const status=chore.requiresApproval?"pending":"done";
-    const xpAmt=chore.xp||10;
-    /* FIX: atomic write — comp + XP + weekXP + txlog in ONE Firebase call */
-    const updates={};
-    updates[`wh/comps/${dk}/${ckey(choreId,kidId)}`]={status,ts:Date.now(),choreId,kidId,xp:xpAmt};
-    if(status==="done"){
-      updates[`wh/kids/${kidId}/xp`]=(kid.xp||0)+xpAmt;
-      updates[`wh/kids/${kidId}/lastActiveDate`]=dk;
-      const wk=weekKey(dk);
-      updates[`wh/weekXp/${wk}/${kidId}`]=(weekXp[wk]?.[kidId]||0)+xpAmt;
-      updates[`wh/txlog/${txId(kidId)}`]={kidId,type:"chore",xp:xpAmt,cents:0,desc:chore.title,ts:Date.now()};
-    }
     try{
+      /* UNCHECK: if already done (not approved), reverse XP and delete comp */
+      if(existing?.status==="done"){
+        const xpAmt=existing.xp||chore.xp||5;
+        const wk=weekKey(dk);
+        const updates={};
+        updates[`wh/comps/${dk}/${ckey(choreId,kidId)}`]=null;
+        updates[`wh/kids/${kidId}/xp`]=Math.max(0,(kid.xp||0)-xpAmt);
+        updates[`wh/weekXp/${wk}/${kidId}`]=Math.max(0,(weekXp[wk]?.[kidId]||0)-xpAmt);
+        await fa(updates);
+        toast(`${chore.title} unchecked (-${xpAmt} XP)`,"warn");
+        return;
+      }
+      /* Approved chores cannot be unchecked — parent must reject from approval panel */
+      if(existing?.status==="approved")return;
+      /* COMPLETE */
+      const status=chore.requiresApproval?"pending":"done";
+      const xpAmt=chore.xp||5;
+      const updates={};
+      updates[`wh/comps/${dk}/${ckey(choreId,kidId)}`]={status,ts:Date.now(),choreId,kidId,xp:xpAmt};
+      if(status==="done"){
+        updates[`wh/kids/${kidId}/xp`]=(kid.xp||0)+xpAmt;
+        updates[`wh/kids/${kidId}/lastActiveDate`]=dk;
+        const wk=weekKey(dk);
+        updates[`wh/weekXp/${wk}/${kidId}`]=(weekXp[wk]?.[kidId]||0)+xpAmt;
+        updates[`wh/txlog/${txId(kidId)}`]={kidId,type:"chore",xp:xpAmt,cents:0,desc:chore.title,ts:Date.now()};
+      }
       await fa(updates);
       if(status==="done")toast(`+${xpAmt} XP for ${kid.name}!`,"success");
       else toast(`${chore.title} submitted for approval`,"info");
@@ -734,7 +746,8 @@ export default function WattsHub(){
               const status=comp?.status||"none";
               const cc=COLORS[k.colorIdx]||COLORS[0];
               const isDone=status==="done"||status==="approved";
-              const canTap=(isKidMode||!parentMode)&&!isDone&&!isOpt;
+              /* allow tap on done to uncheck; block approved (parent-only) and optimistic */
+              const canTap=(isKidMode||!parentMode)&&status!=="approved"&&!isOpt;
               return(
                 <div key={c.id+k.id}
                   className={`ccard${isDone?" done":status==="pending"?" pending":isOpt?" optimistic":""}`}
@@ -749,7 +762,7 @@ export default function WattsHub(){
                     {!activeKid&&<div style={{fontSize:11,color:cc.tx,marginTop:1}}>{k.name}</div>}
                   </div>
                   <span className={`cdiff diff-${c.diff||"easy"}`}>{c.diff||"easy"}</span>
-                  <span className="cxp">+{c.xp||10} XP</span>
+                  <span className="cxp">+{c.xp||5} XP</span>
                   {parentMode&&(
                     <div style={{display:"flex",gap:4,flexShrink:0}} onClick={e=>e.stopPropagation()}>
                       <button className="btn btn-g btn-sm" onClick={()=>{setEditChore({...c});setShowAddChore(true);}}>✏️</button>
@@ -935,7 +948,7 @@ export default function WattsHub(){
           <input className="fi" value={form.title} placeholder="Chore name" onChange={e=>setForm(f=>({...f,title:e.target.value}))}/></div>
         <div className="fg"><label className="fl">Difficulty</label>
           <select className="fi" value={form.diff} onChange={e=>setForm(f=>({...f,diff:e.target.value}))}>
-            <option value="easy">Easy (+10 XP)</option>
+            <option value="easy">Easy (+5 XP)</option>
             <option value="medium">Medium (+20 XP)</option>
             <option value="hard">Hard (+35 XP)</option>
           </select></div>
