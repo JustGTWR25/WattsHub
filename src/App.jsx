@@ -1064,18 +1064,51 @@ export default function WattsHub(){
           {kids.filter(k=>!kidId||k.id===kidId).map(k=>{
             const pal=PAL[k.colorIdx%PAL.length];
             const bal=k.balanceCents||0;
+            const kidBills=bills.filter(b=>b.kidId===k.id&&b.active);
+            const totalBillsCents=kidBills.reduce((a,b)=>a+(b.amountCents||0),0);
+            /* How much of balance goes toward bill vs is free to spend */
+            const towardBill=Math.min(bal,totalBillsCents);
+            const billPct=totalBillsCents>0?Math.min(100,Math.round((bal/totalBillsCents)*100)):0;
+            const remainder=Math.max(0,bal-totalBillsCents);
+            const dueDate=new Date("2026-07-01T00:00:00");
+            const daysLeft=Math.max(0,Math.ceil((dueDate-new Date())/(1000*60*60*24)));
             return(<div key={k.id} className="card">
               <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
                 <Av initials={k.initials} colorIdx={k.colorIdx} size={34}/>
-                <div><div style={{fontSize:14,fontWeight:800}}>{k.name}</div><div style={{fontSize:17,fontWeight:900,color:"var(--am)"}}>{c$(bal)}</div></div>
-              </div>
-              {[{l:"Save",pct:50,c:"var(--gr)"},{l:"Spend",pct:40,c:"var(--am)"},{l:"Share",pct:10,c:"var(--pr)"}].map(b=>(
-                <div key={b.l} style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,fontSize:12}}>
-                  <span style={{width:38,color:"var(--tx2)"}}>{b.l}</span>
-                  <div className="pbar" style={{flex:1}}><div className="pbar-f" style={{width:`${b.pct}%`,background:b.c}}/></div>
-                  <span style={{width:46,textAlign:"right",fontWeight:700}}>{c$(Math.round(bal*(b.pct/100)))}</span>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:14,fontWeight:800}}>{k.name}</div>
+                  <div style={{fontSize:17,fontWeight:900,color:"var(--am)"}}>{c$(bal)}</div>
                 </div>
-              ))}
+                {totalBillsCents>0&&<div style={{textAlign:"right"}}>
+                  <div style={{fontSize:11,color:"var(--tx3)"}}>{daysLeft}d until Jul 1</div>
+                </div>}
+              </div>
+              {totalBillsCents>0&&(
+                <div style={{marginBottom:10}}>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"var(--tx2)",marginBottom:4}}>
+                    <span>Bill savings progress</span>
+                    <span style={{fontWeight:800,color:billPct>=100?"var(--gr)":pal.a}}>{c$(towardBill)} / {c$(totalBillsCents)} ({billPct}%)</span>
+                  </div>
+                  <div className="pbar">
+                    <div className="pbar-f" style={{width:`${billPct}%`,background:billPct>=100?"var(--gr)":pal.a}}/>
+                  </div>
+                  {remainder>0&&<div style={{fontSize:11,color:"var(--tx3)",marginTop:4}}>
+                    {c$(remainder)} available after bill
+                  </div>}
+                  {billPct>=100&&<div style={{fontSize:11,color:"var(--gr)",fontWeight:700,marginTop:4}}>
+                    🎉 Bill covered! {c$(remainder)} extra saved.
+                  </div>}
+                </div>
+              )}
+              {/* Bill breakdown if multiple bills */}
+              {kidBills.length>1&&kidBills.map(bill=>{
+                const bPct=Math.min(100,Math.round((bal/bill.amountCents)*100));
+                return(<div key={bill.id} style={{display:"flex",alignItems:"center",gap:8,marginBottom:5,fontSize:12}}>
+                  <span style={{flex:1,color:"var(--tx2)"}}>{bill.name}</span>
+                  <div className="pbar" style={{flex:2}}><div className="pbar-f" style={{width:`${bPct}%`,background:bPct>=100?"var(--gr)":pal.a}}/></div>
+                  <span style={{width:68,textAlign:"right",fontWeight:700,color:bPct>=100?"var(--gr)":"var(--tx)"}}>{c$(bill.amountCents)}</span>
+                </div>);
+              })}
             </div>);
           })}
         </div>
