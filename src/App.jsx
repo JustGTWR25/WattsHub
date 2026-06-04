@@ -458,7 +458,7 @@ export default function WattsHub(){
   /* Bill progress for current month */
   const billProgress=(kidId)=>{
     const mk2=mk(ld());
-    return (billPay[kidId]||[]).filter?billPay[kidId]:Object.values(billPay[kidId]||{}).filter(p=>p.monthKey===mk2).reduce((a,p)=>a+(p.amountCents||0),0);
+    return Object.values(billPay[kidId]||{}).filter(p=>p.monthKey===mk2).reduce((a,p)=>a+(p.amountCents||0),0);
   };
 
   /* ── Actions ── */
@@ -805,8 +805,9 @@ export default function WattsHub(){
             const gpct=Math.min(100,Math.round((earned/goal)*100));
             const sk=sumKids[k.id];
             const kidBills=bills.filter(b=>b.kidId===k.id&&b.active);
-            const monthPaid=Object.values(billPay[k.id]||{}).filter(p=>p.monthKey===mk(ld())).reduce((a,p)=>a+(p.amountCents||0),0);
+            const bal2=k.balanceCents||0;
             const totalBills=kidBills.reduce((a,b)=>a+(b.amountCents||0),0);
+            const monthPaid=bal2; // show current balance vs total bills due
             return(
               <div key={k.id} className="kcard" style={{background:"var(--sur)",border:"1px solid var(--bdr)",borderRadius:14,padding:16,cursor:"pointer",transition:"box-shadow .15s"}}
                 onMouseEnter={e=>e.currentTarget.style.boxShadow="0 4px 12px rgba(0,0,0,.08)"}
@@ -833,7 +834,7 @@ export default function WattsHub(){
                 {totalBills>0&&(
                   <div style={{marginBottom:8}}>
                     <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"var(--tx2)",marginBottom:3}}>
-                      <span>Bills {c$(monthPaid)} / {c$(totalBills)}</span>
+                      <span>Saved {c$(monthPaid)} / {c$(totalBills)} due Jul 1</span>
                       <span style={{color:monthPaid>=totalBills?"var(--gr)":"var(--am)",fontWeight:700}}>{Math.round((monthPaid/totalBills)*100)}%</span>
                     </div>
                     <div className="pbar"><div className="pbar-f" style={{width:`${Math.min(100,Math.round((monthPaid/totalBills)*100))}%`,background:monthPaid>=totalBills?"var(--gr)":"var(--am)"}}/></div>
@@ -955,30 +956,51 @@ export default function WattsHub(){
           {filteredBills.map(bill=>{
             const kid=kidById(bill.kidId);
             if(!kid)return null;
+            const bal=kid.balanceCents||0;
+            const needed=bill.amountCents;
+            /* Progress = current balance toward the bill amount */
+            const savPct=Math.min(100,Math.round((bal/needed)*100));
+            /* Days until July 1 */
+            const dueDate=new Date("2026-07-01T00:00:00");
+            const today2=new Date();
+            const daysLeft=Math.max(0,Math.ceil((dueDate-today2)/(1000*60*60*24)));
+            /* Earning pace: avg daily from this week × days left */
+            const curWkEarned=weekEarned(bill.kidId,wk(ld()));
+            const dailyRate=curWkEarned/7;
+            const projectedTotal=bal+(dailyRate*daysLeft);
+            const onPace=projectedTotal>=needed;
+            const pal=PAL[kid.colorIdx%PAL.length];
             const monthK=mk(ld());
             const paid=Object.values(billPay[bill.kidId]||{}).filter(p=>p.billId===bill.id&&p.monthKey===monthK).reduce((a,p)=>a+(p.amountCents||0),0);
-            const pct=Math.min(100,Math.round((paid/bill.amountCents)*100));
-            const onPace=weekEarned(bill.kidId,wk(ld()))*(4.3/1)>=bill.amountCents; // rough monthly pace
-            const pal=PAL[kid.colorIdx%PAL.length];
             return(
               <div key={bill.id} style={{background:"var(--sur)",border:"1px solid var(--bdr)",borderLeft:`4px solid ${pal.a}`,borderRadius:12,overflow:"hidden"}}>
                 <div style={{padding:"11px 14px",borderBottom:"1px solid var(--bdr)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                   <div>
                     <div style={{fontSize:14,fontWeight:800}}>{bill.name}</div>
-                    <div style={{fontSize:11,color:"var(--tx2)"}}>{!kidId&&kid.name+" · "}{bill.type==="monthly"?"Monthly":"One-time"}</div>
+                    <div style={{fontSize:11,color:"var(--tx2)"}}>{!kidId&&kid.name+" · "}{daysLeft} days until July 1</div>
                   </div>
                   <div style={{textAlign:"right"}}>
-                    <div style={{fontSize:15,fontWeight:900,color:"var(--re)"}}>{c$(bill.amountCents)}</div>
+                    <div style={{fontSize:15,fontWeight:900,color:"var(--re)"}}>{c$(needed)} due</div>
                     <span className={`pill ${onPace?"pill-gr":"pill-am"}`}>{onPace?"On pace":"Behind"}</span>
                   </div>
                 </div>
                 <div style={{padding:"10px 14px"}}>
-                  <div className="bill-header">
-                    <span style={{fontSize:12,color:"var(--tx2)"}}>Paid this month</span>
-                    <span style={{fontSize:13,fontWeight:800,color:pct>=100?"var(--gr)":"var(--tx)"}}>{c$(paid)} / {c$(bill.amountCents)}</span>
+                  {/* Balance saved toward bill */}
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"var(--tx2)",marginBottom:4}}>
+                    <span>Balance saved</span>
+                    <span style={{fontWeight:800,color:savPct>=100?"var(--gr)":"var(--tx)"}}>{c$(bal)} / {c$(needed)} ({savPct}%)</span>
                   </div>
-                  <div className="pbar"><div className="pbar-f" style={{width:`${pct}%`,background:pct>=100?"var(--gr)":pal.a}}/></div>
-                  <div style={{marginTop:10,display:"flex",gap:6,justifyContent:"flex-end"}}>
+                  <div className="pbar" style={{marginBottom:8}}>
+                    <div className="pbar-f" style={{width:`${savPct}%`,background:savPct>=100?"var(--gr)":pal.a}}/>
+                  </div>
+                  {/* Projected total by due date */}
+                  <div style={{fontSize:11,color:"var(--tx3)",marginBottom:8}}>
+                    At current pace → projected {c$(Math.round(projectedTotal))} by July 1
+                    {!onPace&&<span style={{color:"var(--re)",fontWeight:700}}> (short {c$(Math.max(0,needed-Math.round(projectedTotal)))})</span>}
+                  </div>
+                  {/* Manual payments made this month */}
+                  {paid>0&&<div style={{fontSize:11,color:"var(--tx2)",marginBottom:8}}>Applied this month: <strong style={{color:"var(--gr)"}}>{c$(paid)}</strong></div>}
+                  <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
                     <button className="btn bte bsm" onClick={()=>setPayBillModal({bill,kidId:bill.kidId})}>Pay bill</button>
                     {parentMode&&<button className="btn bg bsm" onClick={()=>setBillModal(bill)}>Edit</button>}
                   </div>
@@ -1171,7 +1193,7 @@ export default function WattsHub(){
       const gpct=Math.min(100,Math.round((earned/goal)*100));
       const completions=Object.entries(comps).filter(([d])=>wk(d)===curWk).flatMap(([,dc])=>Object.entries(dc).filter(([key])=>key.includes(k.id)&&dc[key].status==="done"||dc[key].status==="approved"));
       const monthK=mk(ld());
-      const billsPaid=Object.values(billPay[k.id]||{}).filter(p=>p.monthKey===monthK).reduce((a,p)=>a+(p.amountCents||0),0);
+      const billsPaid=k.balanceCents||0; // current balance vs bills due
       const totalBillsAmt=bills.filter(b=>b.kidId===k.id&&b.active).reduce((a,b)=>a+(b.amountCents||0),0);
       const sk=sumKids[k.id]||{};
       const sumSess=Object.values(sumSessions[k.id]||{}).filter(s=>wk(s.date)===curWk).length;
@@ -1186,7 +1208,7 @@ export default function WattsHub(){
           {kidStats.map(({k,earned,goal,gpct,completions,billsPaid,totalBillsAmt,sk,sumSess})=>{
             const pal=PAL[k.colorIdx%PAL.length];
             const onTrack=gpct>=75;
-            const billOnTrack=totalBillsAmt===0||billsPaid>=(totalBillsAmt*0.5);
+            const billOnTrack=totalBillsAmt===0||billsPaid>=totalBillsAmt;
             return(<div key={k.id} className="wk-card" style={{borderLeft:`4px solid ${pal.a}`}}>
               <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
                 <Av initials={k.initials} colorIdx={k.colorIdx} size={30}/>
