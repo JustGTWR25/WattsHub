@@ -333,10 +333,22 @@ function FbCfgModal({onSave,onSkip}){
 ════════════════════════════════════════════════════════════ */
 export default function WattsHub(){
   /* Firebase */
+  /* Hardcoded config — every device connects automatically */
+  const FIREBASE_CFG={
+    apiKey:"AIzaSyD6GE7dsUhXUtQR4faVpIVotctG1lS003Y",
+    authDomain:"watts-f5205.firebaseapp.com",
+    databaseURL:"https://watts-f5205-default-rtdb.firebaseio.com",
+    projectId:"watts-f5205",
+    storageBucket:"watts-f5205.firebasestorage.app",
+    messagingSenderId:"982199951741",
+    appId:"1:982199951741:web:a89cebda2dff026f7eac14",
+  };
   const[fbCfg,setFbCfg]=useState(()=>{
+    /* Check localStorage first in case config was updated via the setup modal */
     for(const k of["wh_fbcfg","wh3_cfg","wh_fb","wattshub_cfg"]){
       try{const p=JSON.parse(localStorage.getItem(k)||"null");if(p?.apiKey&&p?.databaseURL)return p;}catch{}
-    }return null;
+    }
+    return FIREBASE_CFG;
   });
   const[showCfg,setShowCfg]=useState(false);
   const FB=useFirebase(fbCfg);
