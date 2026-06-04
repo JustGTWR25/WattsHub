@@ -451,7 +451,8 @@ export default function WattsHub(){
 
   /* Weekly earned cents for a kid (from txlog) */
   const weekEarned=(kidId,weekKey)=>{
-    return txLog.filter(tx=>tx.kidId===kidId&&tx.type==="chore"&&wk(new Date(tx.ts).toLocaleDateString("en-CA"))===weekKey&&tx.cents>0).reduce((a,tx)=>a+(tx.cents||0),0);
+    /* FIX: transactions written with actorId field, not kidId */
+    return txLog.filter(tx=>(tx.actorId===kidId||tx.kidId===kidId)&&(tx.type==="chore"||tx.type==="pool"||tx.type==="summer_bonus")&&wk(new Date(tx.ts).toLocaleDateString("en-CA"))===weekKey&&tx.cents>0).reduce((a,tx)=>a+(tx.cents||0),0);
   };
 
   /* Bill progress for current month */
