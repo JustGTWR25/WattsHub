@@ -1240,7 +1240,7 @@ export default function WattsHub(){
               <div className="card" style={{marginBottom:12,background:"var(--prl)",border:"1px solid #C7D2FE"}}>
                 <div className="ch" style={{color:"var(--pr)"}}>⚡ Credit past sessions</div>
                 <p style={{fontSize:12,color:"var(--tx2)",marginBottom:10,lineHeight:1.6}}>Backfill Mon–Thu sessions for kids who completed them but weren't logged in the app yet.</p>
-                <div style={{display:"flex",gap:8",flexWrap:"wrap"}}>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
                   {kids.map(k=>(
                     <button key={k.id} className="btn bbl bsm" onClick={()=>backfillSessions(k.id,k.name,4)}>
                       Credit {k.name} (4 sessions)
