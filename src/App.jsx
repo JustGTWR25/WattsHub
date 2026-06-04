@@ -388,6 +388,8 @@ export default function WattsHub(){
   const[parentTaskModal,setParentTaskModal]=useState(null);
   const[checkinModal,setCheckinModal]=useState(false);
   const[showTimer,setShowTimer]=useState(false);
+  const[bonusModal,setBonusModal]=useState(null); // {kidId, kidName}
+  const[noteModal,setNoteModal]=useState(null);   // {kidId, kidName}
 
   const{list:toasts,add:toast}=useToasts();
 
@@ -657,6 +659,50 @@ export default function WattsHub(){
     toast(`Summer session logged — ${focus}!`,"success");
   }
 
+  async function backfillSessions(kidId,kidName,count=4){
+    /* Credit past sessions — writes them with dates for Mon–Thu of current week */
+    const today2=new Date();
+    const dayOfWeek=today2.getDay(); // 0=Sun,1=Mon...
+    const upd={};
+    const daysBack=[3,2,1,0]; // Thu,Wed,Tue,Mon relative offsets from Thu
+    let credited=0;
+    for(let i=0;i<7&&credited<count;i++){
+      const d=new Date(today2);
+      d.setDate(d.getDate()-i);
+      const dow=d.getDay();
+      if(![1,2,3,4].includes(dow))continue; // Mon–Thu only
+      const ds=d.toLocaleDateString("en-CA");
+      const focus=["","math","literacy","math","literacy"][dow];
+      const sessId=`${ds}_backfill_${uid6()}`;
+      // Only add if not already done
+      const existing=Object.values(sumSessions[kidId]||{}).find(s=>s.date===ds);
+      if(!existing){
+        upd[`wh/summerSessions/${kidId}/${sessId}`]={date:ds,focus,completedAt:Date.now(),backfilled:true};
+        credited++;
+      }
+    }
+    if(Object.keys(upd).length>0){
+      await FB.atomic(upd);
+      toast(`${credited} session${credited!==1?"s":""} credited for ${kidName} ✓`,"success");
+    }else{
+      toast("Sessions already logged for this week","info");
+    }
+  }
+
+  async function giveBonus(kidId,kidName,amountCents,note){
+    const kid=kidById(kidId);if(!kid)return;
+    const upd={};
+    upd[`wh/kids/${kidId}/balanceCents`]=(kid.balanceCents||0)+amountCents;
+    upd[`wh/txlog/${tkid(kidId)}`]={actorId:kidId,type:"bonus",cents:amountCents,desc:`Bonus: ${note||"Great attitude!"}`,ts:Date.now()};
+    await FB.atomic(upd);
+    toast(`+${c$(amountCents)} bonus for ${kidName}! 🌟`,"success");
+  }
+
+  async function saveNote(kidId,note){
+    await FB.atomic({[`wh/kids/${kidId}/latestNote`]:note});
+    toast("Note saved ✓","success");
+  }
+
   async function awardXp(kidId,amt){
     const kid=kidById(kidId);if(!kid)return;
     await FB.atomic({[`wh/kids/${kidId}/balanceCents`]:(kid.balanceCents||0)+amt,[`wh/txlog/${tkid(kidId)}`]:{actorId:kidId,type:"bonus",cents:amt,desc:"Focus timer bonus",ts:Date.now()}});
@@ -824,7 +870,8 @@ export default function WattsHub(){
               <div key={k.id} className="kcard" style={{background:"var(--sur)",border:"1px solid var(--bdr)",borderRadius:14,padding:16,cursor:"pointer",transition:"box-shadow .15s"}}
                 onMouseEnter={e=>e.currentTarget.style.boxShadow="0 4px 12px rgba(0,0,0,.08)"}
                 onMouseLeave={e=>e.currentTarget.style.boxShadow=""}
-                onClick={()=>enterKid(k.id)}>
+                onClick={()=>enterKid(k.id)}
+                onContextMenu={e=>{e.preventDefault();if(parentMode)setBonusModal({kidId:k.id,kidName:k.name});}}>
                 <div style={{display:"flex",alignItems:"center",gap:11,marginBottom:11}}>
                   <Av initials={k.initials} colorIdx={k.colorIdx} size={42}/>
                   <div style={{flex:1}}>
@@ -852,9 +899,12 @@ export default function WattsHub(){
                     <div className="pbar"><div className="pbar-f" style={{width:`${Math.min(100,Math.round((monthPaid/totalBills)*100))}%`,background:monthPaid>=totalBills?"var(--gr)":"var(--am)"}}/></div>
                   </div>
                 )}
-                <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
                   {sk&&(sk.totalSessionsCompleted||0)>0&&<span className="chip">☀️ {sk.totalSessionsCompleted} sessions</span>}
+                  {parentMode&&<button className="btn bte bxs" style={{marginLeft:"auto"}} onClick={e=>{e.stopPropagation();setBonusModal({kidId:k.id,kidName:k.name});}}>🌟</button>}
+                  {parentMode&&<button className="btn bbl bxs" onClick={e=>{e.stopPropagation();setNoteModal({kidId:k.id,kidName:k.name});}}>📝</button>}
                 </div>
+                {k.latestNote&&<div style={{fontSize:11,color:"var(--pr)",fontStyle:"italic",marginTop:6,padding:"5px 8px",background:"var(--prl)",borderRadius:6}}>📝 {k.latestNote}</div>}
               </div>
             );
           })}
@@ -1185,7 +1235,22 @@ export default function WattsHub(){
           ))}
         </div>
         {tab==="sessions"&&(
-          kidId?<KidSumCard kid={kidById(kidId)}/>:kids.map(k=><KidSumCard key={k.id} kid={k}/>)
+          <div>
+            {parentMode&&!kidId&&(
+              <div className="card" style={{marginBottom:12,background:"var(--prl)",border:"1px solid #C7D2FE"}}>
+                <div className="ch" style={{color:"var(--pr)"}}>⚡ Credit past sessions</div>
+                <p style={{fontSize:12,color:"var(--tx2)",marginBottom:10,lineHeight:1.6}}>Backfill Mon–Thu sessions for kids who completed them but weren't logged in the app yet.</p>
+                <div style={{display:"flex",gap:8",flexWrap:"wrap"}}>
+                  {kids.map(k=>(
+                    <button key={k.id} className="btn bbl bsm" onClick={()=>backfillSessions(k.id,k.name,4)}>
+                      Credit {k.name} (4 sessions)
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {kidId?<KidSumCard kid={kidById(kidId)}/>:kids.map(k=><KidSumCard key={k.id} kid={k}/>)}
+          </div>
         )}
         {tab==="reports"&&(
           <div>
@@ -1463,6 +1528,50 @@ export default function WattsHub(){
   }
 
   /* Focus Timer */
+  function BonusModal(){
+    const m=bonusModal;
+    const[amt,setAmt]=useState("0.50");
+    const[note,setNote]=useState("");
+    if(!m)return null;
+    return(<div className="overlay" onClick={()=>setBonusModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
+      <div className="modal-h">🌟 Give Bonus — {m.kidName}</div>
+      <div className="fg"><label className="fl">Amount ($)</label>
+        <div className="frow">
+          {["0.25","0.50","1.00","2.00","5.00"].map(v=>(
+            <button key={v} className={`btn bsm ${amt===v?"bp":"bg"}`} onClick={()=>setAmt(v)}>${v}</button>
+          ))}
+        </div>
+        <input className="fi" style={{marginTop:6}} type="number" step="0.25" min="0.01" value={amt} onChange={e=>setAmt(e.target.value)}/>
+      </div>
+      <div className="fg"><label className="fl">Reason (shown in transaction log)</label>
+        <input className="fi" placeholder="Great attitude, helped without being asked..." value={note} onChange={e=>setNote(e.target.value)}/></div>
+      <div className="fax">
+        <button className="btn bg" onClick={()=>setBonusModal(null)}>Cancel</button>
+        <button className="btn bp" disabled={!note.trim()||parseFloat(amt)<=0} onClick={()=>{giveBonus(m.kidId,m.kidName,Math.round(parseFloat(amt)*100),note);setBonusModal(null);}}>
+          Give +{amt?`$${parseFloat(amt).toFixed(2)}`:""}
+        </button>
+      </div>
+    </div></div>);
+  }
+
+  function NoteModal(){
+    const m=noteModal;
+    const kid=m?kidById(m.kidId):null;
+    const[note,setNote]=useState(kid?.latestNote||"");
+    if(!m||!kid)return null;
+    return(<div className="overlay" onClick={()=>setNoteModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
+      <div className="modal-h">📝 Note for {m.kidName}</div>
+      <p style={{fontSize:12,color:"var(--tx2)",marginBottom:12,lineHeight:1.6}}>This note appears on {m.kidName}'s dashboard card so they see it when you open the app together.</p>
+      <div className="fg"><label className="fl">Message</label>
+        <textarea className="fi" rows={3} placeholder="Great job this week! Keep it up..." value={note} onChange={e=>setNote(e.target.value)}/></div>
+      <div className="fax">
+        <button className="btn bg" onClick={()=>{saveNote(m.kidId,"");setNoteModal(null);}}>Clear note</button>
+        <button className="btn bg" onClick={()=>setNoteModal(null)}>Cancel</button>
+        <button className="btn bp" onClick={()=>{saveNote(m.kidId,note);setNoteModal(null);}}>Save note</button>
+      </div>
+    </div></div>);
+  }
+
   function FocusTimer(){
     const D=25*60;
     const[s,setS]=useState(D);const[run,setRun]=useState(false);const[done,setDone]=useState(false);const[sk,setSk]=useState(kids[0]?.id||"");
@@ -1512,13 +1621,38 @@ export default function WattsHub(){
       :[{id:"tasks",l:"✓ Tasks"},{id:"pool",l:"🎯 Pool"},{id:"summer",l:"☀️ Summer"},{id:"bills",l:"💸 Bills"},{id:"store",l:"🛍 Store"},{id:"money",l:"💰 Money"}];
     return(<div className="km-wrap">
       {!online&&ready&&<div className="offline-bar">⚠️ Offline</div>}
-      <div className="km-hdr">
-        <Av initials={actor.initials} colorIdx={actor.colorIdx||0} size={38}/>
-        <div style={{flex:1}}>
-          <div style={{fontSize:16,fontWeight:900}}>{actor.name}</div>
-          {!isParActor&&<div style={{fontSize:11,color:"var(--tx2)"}}>{bal}</div>}
+      <div className="km-hdr" style={{flexDirection:"column",alignItems:"stretch",gap:8}}>
+        <div style={{display:"flex",alignItems:"center",gap:11}}>
+          <Av initials={actor.initials} colorIdx={actor.colorIdx||0} size={38}/>
+          <div style={{flex:1}}>
+            <div style={{fontSize:16,fontWeight:900}}>{actor.name}</div>
+            {!isParActor&&<div style={{fontSize:12,fontWeight:800,color:"var(--am)"}}>{bal}</div>}
+          </div>
+          <button className="btn bg bsm" onClick={exitToPicker}>← Home</button>
         </div>
-        <button className="btn bg bsm" onClick={exitToPicker}>← Home</button>
+        {!isParActor&&(()=>{
+          const kid2=kidById(activeKid);
+          const kidBills2=bills.filter(b=>b.kidId===activeKid&&b.active);
+          const totalBills2=kidBills2.reduce((a,b)=>a+(b.amountCents||0),0);
+          const bal2=kid2?.balanceCents||0;
+          const dueDate2=new Date("2026-07-01T00:00:00");
+          const daysLeft2=Math.max(0,Math.ceil((dueDate2-new Date())/(1000*60*60*24)));
+          const pal2=PAL[(kid2?.colorIdx||0)%PAL.length];
+          if(!totalBills2)return null;
+          const billPct2=Math.min(100,Math.round((bal2/totalBills2)*100));
+          return(<div style={{paddingTop:4}}>
+            {kidBills2.map(bill=>{
+              const bPct=Math.min(100,Math.round((bal2/bill.amountCents)*100));
+              return(<div key={bill.id} style={{marginBottom:5}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}>
+                  <span style={{color:"var(--tx2)",fontWeight:600}}>{bill.name}</span>
+                  <span style={{fontWeight:800,color:bPct>=100?"var(--gr)":pal2.a}}>{c$(bal2)} / {c$(bill.amountCents)} · {daysLeft2}d left</span>
+                </div>
+                <div className="pbar"><div className="pbar-f" style={{width:`${bPct}%`,background:bPct>=100?"var(--gr)":pal2.a}}/></div>
+              </div>);
+            })}
+          </div>);
+        })()}
       </div>
       <div className="km-tabs">{tabs.map(t=><button key={t.id} className={`km-tab${kmTab===t.id?" act":""}`} onClick={()=>setKmTab(t.id)}>{t.l}</button>)}</div>
       <div className="km-body">
@@ -1580,7 +1714,7 @@ export default function WattsHub(){
   if(screen==="pin-verify")return(<><style>{CSS}</style><PINScreen mode="verify" onSuccess={enterParent} onBack={()=>setScreen("picker")}/></>);
   if(screen==="kid")return(<><style>{CSS}</style><ErrBound><KidModeApp/></ErrBound>
     {choreModal&&<ChoreModalComp/>}{editCompModal&&<EditCompModalComp/>}{parentTaskModal&&<ParentTaskModalComp/>}
-    {poolAddModal&&<PoolAddModalComp/>}<Toasts/></>);
+    {poolAddModal&&<PoolAddModalComp/>}{bonusModal&&<BonusModal/>}{noteModal&&<NoteModal/>}<Toasts/></>);
 
   /* Parent app */
   const NAV=[
@@ -1614,6 +1748,8 @@ export default function WattsHub(){
     {payBillModal&&<PayBillModalComp/>}
     {poolAddModal&&<PoolAddModalComp/>}
     {parentTaskModal&&<ParentTaskModalComp/>}
+    {bonusModal&&<BonusModal/>}
+    {noteModal&&<NoteModal/>}
     {showTimer&&<FocusTimer/>}
 
     <div className="layout">
@@ -1640,6 +1776,10 @@ export default function WattsHub(){
           {activeKid&&<button className="skid" style={{color:"var(--tx3)"}} onClick={()=>{setActiveKid(null);setView("dashboard");}}>
             <span style={{width:22,textAlign:"center"}}>←</span>All kids
           </button>}
+          {parentMode&&activeKid&&(()=>{const k=kidById(activeKid);return k?(<div style={{display:"flex",gap:4,padding:"4px 10px"}}>
+            <button className="btn bte bxs" style={{flex:1}} onClick={()=>setBonusModal({kidId:k.id,kidName:k.name})}>🌟 Bonus</button>
+            <button className="btn bbl bxs" style={{flex:1}} onClick={()=>setNoteModal({kidId:k.id,kidName:k.name})}>📝 Note</button>
+          </div>):null;})()}
           <div className="sdiv" style={{marginTop:8}}>Parents</div>
           {parents.map(p=><button key={p.id} className="skid" onClick={()=>setParentTaskModal({parentId:p.id})}>
             <Av initials={p.initials} colorIdx={p.colorIdx||4} size={22}/>
@@ -1667,6 +1807,8 @@ export default function WattsHub(){
           <div style={{display:"flex",gap:6,alignItems:"center"}}>
             {ready&&<span style={{fontSize:11,fontWeight:700,padding:"3px 8px",borderRadius:5,background:online?"var(--grl)":"var(--aml)",color:online?"var(--gr)":"var(--am)"}}>{online?"● Live":"⚠ Offline"}</span>}
             {pendCount>0&&parentMode&&<span style={{fontSize:11,fontWeight:700,padding:"3px 8px",borderRadius:5,background:"var(--aml)",color:"var(--am)"}}>{pendCount} pending</span>}
+            {parentMode&&activeKid&&<button className="btn bte bsm" onClick={()=>setBonusModal({kidId:activeKid,kidName:kidById(activeKid)?.name||""})}>🌟 Bonus</button>}
+            {parentMode&&activeKid&&<button className="btn bbl bsm" onClick={()=>setNoteModal({kidId:activeKid,kidName:kidById(activeKid)?.name||""})}>📝 Note</button>}
             {parentMode&&<button className="btn bg bsm" onClick={()=>setShowTimer(true)}>⏱</button>}
             {parentMode&&<button className="btn bg bsm" onClick={()=>setParentTaskModal({})}>+ Log Task</button>}
             {parentMode&&view==="pool"&&<button className="btn bbl bsm" onClick={()=>setPoolAddModal(true)}>+ Pool Chore</button>}
