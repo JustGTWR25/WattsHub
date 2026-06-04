@@ -483,11 +483,12 @@ export default function WattsHub(){
   const exitToPicker=()=>{setScreen("picker");setParentMode(false);setActiveKid(null);setActiveParent(null);};
   const goPin=()=>setScreen(hasPIN?"pin-verify":"pin-set");
 
-  async function completeChore(choreId,actorId,isParentActor=false){
+  async function completeChore(choreId,actorId,isParentActor=false,dateKey=null){
     const chore=chores.find(c=>c.id===choreId);
     const kid=isParentActor?null:kidById(actorId);
     if(!chore)return;
-    const dk=ld();
+    /* Use the date being viewed so past-day completions persist correctly */
+    const dk=dateKey||ld();
     const key=`${choreId}_${actorId}`;
     const existing=getComp(dk,choreId,actorId);
     setOptim(o=>({...o,[key]:true}));
@@ -505,13 +506,14 @@ export default function WattsHub(){
       }else if(!existing||existing.status==="none"){
         const status=chore.requiresApproval?"pending":"done";
         const cents=chore.priceCents||25;
-        const upd={[`wh/comps/${dk}/${key}`]:{status,ts:Date.now(),choreId,actorId,cents,isParentActor:!!isParentActor}};
+        const isPastDay=dk!==ld();
+        const upd={[`wh/comps/${dk}/${key}`]:{status,ts:Date.now(),choreId,actorId,cents,isParentActor:!!isParentActor,date:dk}};
         if(status==="done"&&!isParentActor&&kid){
           upd[`wh/kids/${actorId}/balanceCents`]=(kid.balanceCents||0)+cents;
-          upd[`wh/txlog/${tkid(actorId)}`]={actorId,type:"chore",cents,desc:chore.title,ts:Date.now()};
+          upd[`wh/txlog/${tkid(actorId)}`]={actorId,type:"chore",cents,desc:chore.title+(isPastDay?` (${dk})`:""),ts:Date.now()};
         }
         await FB.atomic(upd);
-        toast(status==="done"?(isParentActor?`✓ Logged: ${chore.title}`:`+${c$(cents)} for ${kid?.name}!`):`${chore.title} sent for approval`,"success");
+        toast(status==="done"?(isParentActor?`✓ Logged: ${chore.title}`:`+${c$(cents)} for ${kid?.name}!${isPastDay?" (past day)":""}`):`${chore.title} sent for approval`,"success");
       }
     }catch(e){toast("Save failed — check connection","err");}
     finally{setOptim(o=>{const n={...o};delete n[key];return n;});}
@@ -749,7 +751,7 @@ export default function WattsHub(){
               const actor=kidById(aId)||parById(aId);
               if(!actor)return null;
               const key=`${c.id}_${aId}`;
-              const comp=getComp(selDate,c.id,aId);
+              const comp=getComp(selDate,c.id,aId); /* reads from viewed date */
               const isOpt=optim[key];
               const status=comp?.status||"none";
               const isDone=status==="done"||status==="approved";
@@ -757,7 +759,7 @@ export default function WattsHub(){
               const canTap=!isDone||status==="done";
               return(
                 <div key={key} className={`ccard${isDone?" done":status==="pending"?" pend":isOpt?" opt":""}`}
-                  onClick={()=>canTap&&completeChore(c.id,aId,isParentActor||!!parById(aId))}>
+                  onClick={()=>canTap&&completeChore(c.id,aId,isParentActor||!!parById(aId),selDate)}>
                   <div className={`cchk${isDone?" done":status==="pending"?" pend":isOpt?" opt":""}`}>
                     {isDone&&<span style={{color:"#fff",fontWeight:900,fontSize:12}}>✓</span>}
                     {status==="pending"&&<span style={{fontSize:10}}>⏳</span>}
