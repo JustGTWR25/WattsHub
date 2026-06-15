@@ -61,6 +61,95 @@ const sumActive=()=>{const n=new Date(),s=new Date("2026-06-01T00:00:00"),e=new 
 const sumWeeks=()=>{const s=new Date("2026-06-01T00:00:00"),n=new Date();return n<s?0:Math.max(1,Math.ceil((n-s)/(7*86400000)));};
 const prevSessDay=()=>{const d=new Date();d.setDate(d.getDate()-1);for(let i=0;i<5;i++){if(SDAYS.has(d.getDay()))return d.toLocaleDateString("en-CA");d.setDate(d.getDate()-1);}return null;};
 
+/* ─── CLEANING POOL: intervals + seed ─────────────────────── */
+const INTERVAL_DAYS={daily:1,weekly:7,biweekly:14,monthly:30,seasonal:90};
+const FREQ_OPTS=["daily","weekly","biweekly","monthly","seasonal"];
+const FREQ_LBL={daily:"Daily",weekly:"Weekly",biweekly:"Biweekly",monthly:"Monthly",seasonal:"Seasonal"};
+function intervalMsOf(c){const d=(c&&c.intervalDays)||INTERVAL_DAYS[c&&c.freq]||7;return d*86400000;}
+// Recurring chores rest until their interval elapses, then become due again.
+// Legacy (non-recurring) chores keep the old "available unless completed" behavior.
+function isPoolDue(c,now=Date.now()){
+  if(c&&c.recurring){ if(!c.lastCompletedAt)return true; return now-c.lastCompletedAt>=intervalMsOf(c); }
+  return !(c&&c.completedBy);
+}
+function daysUntilDue(c,now=Date.now()){ if(isPoolDue(c,now))return 0; return Math.ceil((c.lastCompletedAt+intervalMsOf(c)-now)/86400000); }
+function dueLabel(c,now=Date.now()){ const d=daysUntilDue(c,now); if(d===0)return"Due now"; if(d===1)return"Done · back tomorrow"; return `Done · back in ${d} days`; }
+
+const CLEAN_SEED=[
+  {id:'cl_kitchen_01',title:'Wipe countertops & stovetop',area:'Kitchen',freq:'daily',intervalDays:1,priceCents:35,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_kitchen_03',title:'Wipe down sink',area:'Kitchen',freq:'daily',intervalDays:1,priceCents:25,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_kitchen_04',title:'Sweep or vacuum floor',area:'Kitchen',freq:'daily',intervalDays:1,priceCents:35,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_kitchen_05',title:'Empty trash',area:'Kitchen',freq:'daily',intervalDays:1,priceCents:25,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_kitchen_06',title:'Wipe microwave interior',area:'Kitchen',freq:'weekly',intervalDays:7,priceCents:50,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_kitchen_07',title:'Clean stovetop burners & grates',area:'Kitchen',freq:'weekly',intervalDays:7,priceCents:100,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_kitchen_08',title:'Wipe cabinet fronts & handles',area:'Kitchen',freq:'weekly',intervalDays:7,priceCents:75,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_kitchen_09',title:'Mop floor',area:'Kitchen',freq:'weekly',intervalDays:7,priceCents:100,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_kitchen_10',title:'Clean refrigerator exterior & handles',area:'Kitchen',freq:'weekly',intervalDays:7,priceCents:50,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_kitchen_11',title:'Wipe backsplash',area:'Kitchen',freq:'biweekly',intervalDays:14,priceCents:75,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_kitchen_12',title:'Clean inside microwave',area:'Kitchen',freq:'biweekly',intervalDays:14,priceCents:100,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_kitchen_13',title:'Clean oven interior',area:'Kitchen',freq:'monthly',intervalDays:30,priceCents:400,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_kitchen_14',title:'Clean refrigerator interior & drawers',area:'Kitchen',freq:'monthly',intervalDays:30,priceCents:300,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_kitchen_15',title:'Wash trash can',area:'Kitchen',freq:'monthly',intervalDays:30,priceCents:150,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_kitchen_16',title:'Clean range hood & filter',area:'Kitchen',freq:'monthly',intervalDays:30,priceCents:250,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_kitchen_17',title:'Descale dishwasher & run clean cycle',area:'Kitchen',freq:'monthly',intervalDays:30,priceCents:150,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_kitchen_18',title:'Pull out fridge/stove & clean behind',area:'Kitchen',freq:'seasonal',intervalDays:90,priceCents:500,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_kitchen_19',title:'Deep clean pantry & check expiry dates',area:'Kitchen',freq:'seasonal',intervalDays:90,priceCents:400,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_bath_01',title:'Wipe toilet seat & exterior',area:'Bathrooms',freq:'daily',intervalDays:1,priceCents:25,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_bath_02',title:'Wipe sink & faucet',area:'Bathrooms',freq:'daily',intervalDays:1,priceCents:25,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_bath_04',title:'Empty trash',area:'Bathrooms',freq:'weekly',intervalDays:7,priceCents:25,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_bath_05',title:'Scrub toilet bowl',area:'Bathrooms',freq:'weekly',intervalDays:7,priceCents:100,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_bath_06',title:'Clean shower/tub',area:'Bathrooms',freq:'weekly',intervalDays:7,priceCents:150,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_bath_07',title:'Mop or scrub floor',area:'Bathrooms',freq:'weekly',intervalDays:7,priceCents:100,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_bath_08',title:'Wash bath mat',area:'Bathrooms',freq:'weekly',intervalDays:7,priceCents:50,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_bath_09',title:'Wipe mirrors',area:'Bathrooms',freq:'weekly',intervalDays:7,priceCents:50,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_bath_10',title:'Restock toiletries & paper products',area:'Bathrooms',freq:'weekly',intervalDays:7,priceCents:50,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_bath_11',title:'Wipe cabinet faces & light switches',area:'Bathrooms',freq:'biweekly',intervalDays:14,priceCents:75,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_bath_12',title:'Scrub grout',area:'Bathrooms',freq:'monthly',intervalDays:30,priceCents:350,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_bath_13',title:'Clean exhaust fan cover',area:'Bathrooms',freq:'monthly',intervalDays:30,priceCents:150,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_bath_14',title:'Wash shower curtain & liner',area:'Bathrooms',freq:'monthly',intervalDays:30,priceCents:100,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_bath_15',title:'Deep clean & organize under-sink cabinet',area:'Bathrooms',freq:'seasonal',intervalDays:90,priceCents:400,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_living_02',title:'Fluff & straighten cushions',area:'Living room & dining',freq:'daily',intervalDays:1,priceCents:25,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_living_03',title:'Vacuum upholstery & cushions',area:'Living room & dining',freq:'weekly',intervalDays:7,priceCents:100,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_living_04',title:'Vacuum carpets & rugs',area:'Living room & dining',freq:'weekly',intervalDays:7,priceCents:100,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_living_05',title:'Dust furniture surfaces',area:'Living room & dining',freq:'weekly',intervalDays:7,priceCents:75,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_living_07',title:'Empty trash & recycling',area:'Living room & dining',freq:'weekly',intervalDays:7,priceCents:25,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_living_08',title:'Dust shelves & decor',area:'Living room & dining',freq:'biweekly',intervalDays:14,priceCents:100,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_living_09',title:'Clean light switches & door handles',area:'Living room & dining',freq:'biweekly',intervalDays:14,priceCents:50,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_living_10',title:'Dust baseboards',area:'Living room & dining',freq:'monthly',intervalDays:30,priceCents:150,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_living_11',title:'Clean windows & sills',area:'Living room & dining',freq:'monthly',intervalDays:30,priceCents:200,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_living_12',title:'Wash throw blankets & pillowcases',area:'Living room & dining',freq:'monthly',intervalDays:30,priceCents:75,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_living_13',title:'Move furniture & vacuum underneath',area:'Living room & dining',freq:'seasonal',intervalDays:90,priceCents:400,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_living_14',title:'Clean curtains or drapes',area:'Living room & dining',freq:'seasonal',intervalDays:90,priceCents:350,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_living_15',title:'Dust ceiling fan blades',area:'Living room & dining',freq:'seasonal',intervalDays:90,priceCents:200,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_bed_01',title:'Make beds',area:'Bedrooms',freq:'daily',intervalDays:1,priceCents:25,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_bed_03',title:'Vacuum or sweep floors',area:'Bedrooms',freq:'weekly',intervalDays:7,priceCents:100,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_bed_04',title:'Change bed linens',area:'Bedrooms',freq:'weekly',intervalDays:7,priceCents:100,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_bed_05',title:'Dust nightstands & dressers',area:'Bedrooms',freq:'weekly',intervalDays:7,priceCents:75,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_bed_06',title:'Wipe mirrors',area:'Bedrooms',freq:'biweekly',intervalDays:14,priceCents:50,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_bed_07',title:'Dust ceiling fan & light fixtures',area:'Bedrooms',freq:'monthly',intervalDays:30,priceCents:150,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_bed_08',title:'Wipe window sills & blinds',area:'Bedrooms',freq:'monthly',intervalDays:30,priceCents:150,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_bed_09',title:'Flip / rotate mattress',area:'Bedrooms',freq:'seasonal',intervalDays:90,priceCents:300,recurring:true,source:"cleaningChecklist",suggested:true},
+  {id:'cl_bed_10',title:'Wash comforter/duvet & declutter closet',area:'Bedrooms',freq:'seasonal',intervalDays:90,priceCents:400,recurring:true,source:"cleaningChecklist",suggested:true},
+  {id:'cl_laundry_01',title:'Wipe washer exterior',area:'Laundry room',freq:'weekly',intervalDays:7,priceCents:50,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_laundry_02',title:'Clean lint trap',area:'Laundry room',freq:'weekly',intervalDays:7,priceCents:25,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_laundry_03',title:'Wipe down dryer exterior',area:'Laundry room',freq:'weekly',intervalDays:7,priceCents:50,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_laundry_04',title:'Clean washer drum (self-clean cycle)',area:'Laundry room',freq:'monthly',intervalDays:30,priceCents:150,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_laundry_05',title:'Vacuum behind & under machines',area:'Laundry room',freq:'monthly',intervalDays:30,priceCents:250,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_laundry_06',title:'Clean dryer vent & duct',area:'Laundry room',freq:'seasonal',intervalDays:90,priceCents:400,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_entry_01',title:'Sweep or vacuum floors',area:'Entryway & hallways',freq:'daily',intervalDays:1,priceCents:35,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_entry_02',title:'Wipe down door handles',area:'Entryway & hallways',freq:'weekly',intervalDays:7,priceCents:50,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_entry_03',title:'Dust light fixtures',area:'Entryway & hallways',freq:'monthly',intervalDays:30,priceCents:150,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_entry_04',title:'Wipe baseboards & walls',area:'Entryway & hallways',freq:'monthly',intervalDays:30,priceCents:200,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_entry_05',title:'Wash exterior windows & door glass',area:'Entryway & hallways',freq:'seasonal',intervalDays:90,priceCents:350,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_home_01',title:'Take out all trash & recycling',area:'Whole home',freq:'weekly',intervalDays:7,priceCents:50,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_home_02',title:'Wipe light switches & door knobs',area:'Whole home',freq:'weekly',intervalDays:7,priceCents:50,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_home_03',title:'Dust ceiling corners for cobwebs',area:'Whole home',freq:'monthly',intervalDays:30,priceCents:150,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_home_04',title:'Replace HVAC filter',area:'Whole home',freq:'seasonal',intervalDays:90,priceCents:200,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_home_05',title:'Test smoke & CO detectors',area:'Whole home',freq:'seasonal',intervalDays:90,priceCents:150,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_home_06',title:'Clean windows inside & out',area:'Whole home',freq:'seasonal',intervalDays:90,priceCents:500,recurring:true,source:"cleaningChecklist"},
+  {id:'cl_home_07',title:'Wash walls & baseboards',area:'Whole home',freq:'seasonal',intervalDays:90,priceCents:400,recurring:true,source:"cleaningChecklist"},
+];
+
 const PAL=[
   {a:"#4F46E5",l:"#EEF2FF",t:"#4338CA"},
   {a:"#059669",l:"#ECFDF5",t:"#047857"},
@@ -385,6 +474,7 @@ export default function WattsHub(){
   const[billModal,setBillModal]=useState(null);
   const[payBillModal,setPayBillModal]=useState(null);
   const[poolAddModal,setPoolAddModal]=useState(false);
+  const[poolEditModal,setPoolEditModal]=useState(null); // null | chore object
   const[parentTaskModal,setParentTaskModal]=useState(null);
   const[checkinModal,setCheckinModal]=useState(false);
   const[showTimer,setShowTimer]=useState(false);
@@ -461,7 +551,7 @@ export default function WattsHub(){
   const isAdmin=uid&&allowedUids[uid]?.role==="admin";
 
   /* Claimed pool chore for an actor */
-  const myClaimedPool=(actorId)=>pool.find(p=>p.claimedBy===actorId&&!p.completedBy);
+  const myClaimedPool=(actorId)=>pool.find(p=>p.claimedBy===actorId);
 
   /* Weekly earned cents for a kid (from txlog) */
   const weekEarned=(kidId,weekKey)=>{
@@ -567,28 +657,36 @@ export default function WattsHub(){
 
   async function claimPool(choreId,actorId){
     if(myClaimedPool(actorId)){toast("Finish your current chore first!","warn");return;}
+    const chore=pool.find(p=>p.id===choreId);
+    if(chore&&!isPoolDue(chore)){toast(`Not due yet — ${dueLabel(chore)}.`,"warn");return;}
     await FB.atomic({[`wh/pool/${choreId}/claimedBy`]:actorId,[`wh/pool/${choreId}/claimedAt`]:Date.now()});
     toast("Chore claimed — go do it!","info");
   }
 
   async function completePool(choreId,actorId,isParentActor=false){
     const chore=pool.find(p=>p.id===choreId);
-    const kid=isParentActor?null:kidById(actorId);
     if(!chore)return;
+    if(!isPoolDue(chore)){toast("That one isn't due yet.","warn");return;}
+    const kid=isParentActor?null:kidById(actorId);
     const cents=chore.priceCents||25;
+    const now=Date.now();
     const upd={
       [`wh/pool/${choreId}/claimedBy`]:null,
       [`wh/pool/${choreId}/claimedAt`]:null,
       [`wh/pool/${choreId}/completedBy`]:actorId,
-      [`wh/pool/${choreId}/completedAt`]:Date.now(),
+      [`wh/pool/${choreId}/completedAt`]:now,
     };
-    if(chore.repeating){
+    if(chore.recurring){
+      // Stay done until the interval elapses, then reappear automatically.
+      upd[`wh/pool/${choreId}/lastCompletedAt`]=now;
+    }else if(chore.repeating){
+      // Legacy repeating: available again immediately.
       upd[`wh/pool/${choreId}/completedBy`]=null;
       upd[`wh/pool/${choreId}/completedAt`]=null;
     }
     if(!isParentActor&&kid){
       upd[`wh/kids/${actorId}/balanceCents`]=(kid.balanceCents||0)+cents;
-      upd[`wh/txlog/${tkid(actorId)}`]={actorId,type:"pool",cents,desc:`Pool: ${chore.title}`,ts:Date.now()};
+      upd[`wh/txlog/${tkid(actorId)}`]={actorId,type:"pool",cents,desc:`Pool: ${chore.title}`,ts:now};
     }
     await FB.atomic(upd);
     toast(isParentActor?`✓ Pool chore done: ${chore.title}`:`+${c$(cents)} — pool chore complete!`,"success");
@@ -620,6 +718,27 @@ export default function WattsHub(){
   }
 
   async function removePoolChore(id){await FB.del(`wh/pool/${id}`);toast("Pool chore removed","warn");}
+
+  async function seedCleaningPool(){
+    const existing=new Set(pool.map(p=>p.id));
+    const upd={};let n=0;
+    CLEAN_SEED.forEach(c=>{
+      if(existing.has(c.id))return;
+      upd[`wh/pool/${c.id}`]={...c,claimedBy:null,claimedAt:null,completedBy:null,completedAt:null,lastCompletedAt:null};
+      n++;
+    });
+    if(!n){toast("Cleaning chores already added","info");return;}
+    await FB.atomic(upd);
+    toast(`Added ${n} cleaning chores ✓`,"success");
+  }
+
+  async function updatePoolChore(id,patch){
+    const upd={};
+    Object.entries(patch).forEach(([k,v])=>{upd[`wh/pool/${id}/${k}`]=v;});
+    if(patch.freq&&!("intervalDays"in patch))upd[`wh/pool/${id}/intervalDays`]=INTERVAL_DAYS[patch.freq]||7;
+    await FB.atomic(upd);
+    toast("Pool chore updated ✓","success");
+  }
 
   async function payBill(billId,kidId,amountCents){
     const kid=kidById(kidId);
@@ -789,10 +908,11 @@ export default function WattsHub(){
   }
 
   function PoolView({actorId,isParentActor=false,showManage=false}){
-    const available=pool.filter(p=>!p.claimedBy&&!p.completedBy);
-    const claimed=pool.filter(p=>p.claimedBy===actorId&&!p.completedBy);
-    const done=pool.filter(p=>p.completedBy&&p.completedBy===actorId);
     const myClaimed=myClaimedPool(actorId);
+    const available=pool.filter(p=>!p.claimedBy&&isPoolDue(p));
+    const resting=pool.filter(p=>!p.claimedBy&&p.recurring&&!isPoolDue(p));
+    const done=pool.filter(p=>p.completedBy===actorId&&p.completedAt&&new Date(p.completedAt).toLocaleDateString("en-CA")===ld());
+    const FreqPill=({c})=>c&&c.freq?<span className="cdiff" style={{background:"#EEF2FF",color:"#4338CA"}}>{FREQ_LBL[c.freq]||c.freq}</span>:<span className={`cdiff d${c.diff?.[0]||"e"}`}>{c.diff||"easy"}</span>;
     return(
       <div>
         {myClaimed&&(
@@ -812,26 +932,50 @@ export default function WattsHub(){
         <div className="card" style={{marginBottom:12}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
             <div className="ch" style={{marginBottom:0}}>🎯 Available to grab</div>
-            {showManage&&<button className="btn bbl bsm" onClick={()=>setPoolAddModal(true)}>+ Add</button>}
+            {showManage&&<div style={{display:"flex",gap:6}}>
+              <button className="btn bg bsm" onClick={()=>seedCleaningPool()}>🧹 Add cleaning set</button>
+              <button className="btn bbl bsm" onClick={()=>setPoolAddModal(true)}>+ Add</button>
+            </div>}
           </div>
-          {available.length===0?<div style={{color:"var(--tx3)",fontSize:13}}>No pool chores right now.</div>:(
+          {available.length===0?<div style={{color:"var(--tx3)",fontSize:13}}>No pool chores due right now.</div>:(
             available.map(p=>(
               <div key={p.id} className="ccard">
                 <div className="cchk"/>
                 <div style={{flex:1}}>
                   <div className="ctitle">{p.title}</div>
-                  {p.note&&<div style={{fontSize:11,color:"var(--tx2)"}}>{p.note}</div>}
+                  {(p.area||p.note)&&<div style={{fontSize:11,color:"var(--tx2)"}}>{p.area?p.area:""}{p.area&&p.note?" · ":""}{p.note||""}</div>}
                 </div>
-                <span className={`cdiff d${p.diff?.[0]||"e"}`}>{p.diff||"easy"}</span>
+                <FreqPill c={p}/>
                 <span className="cprice">{c$(p.priceCents||25)}</span>
                 <div onClick={e=>e.stopPropagation()} style={{display:"flex",gap:4}}>
                   {actorId&&!myClaimed&&<button className="btn bbl bsm" onClick={()=>claimPool(p.id,actorId)}>Claim</button>}
+                  {showManage&&<button className="btn bg bxs" onClick={()=>setPoolEditModal(p)}>✏️</button>}
                   {showManage&&<button className="btn bco bxs" onClick={()=>removePoolChore(p.id)}>🗑</button>}
                 </div>
               </div>
             ))
           )}
         </div>
+        {resting.length>0&&(
+          <div className="card" style={{marginBottom:12}}>
+            <div className="ch">😴 Scheduled (resting)</div>
+            {resting.map(p=>(
+              <div key={p.id} className="ccard">
+                <div className="cchk"/>
+                <div style={{flex:1}}>
+                  <div className="ctitle">{p.title}</div>
+                  <div style={{fontSize:11,color:"var(--tx2)"}}>{p.area?p.area+" · ":""}{dueLabel(p)}</div>
+                </div>
+                <FreqPill c={p}/>
+                <span className="cprice">{c$(p.priceCents||25)}</span>
+                {showManage&&<div onClick={e=>e.stopPropagation()} style={{display:"flex",gap:4}}>
+                  <button className="btn bg bxs" onClick={()=>setPoolEditModal(p)}>✏️</button>
+                  <button className="btn bco bxs" onClick={()=>removePoolChore(p.id)}>🗑</button>
+                </div>}
+              </div>
+            ))}
+          </div>
+        )}
         {done.length>0&&(
           <div className="card">
             <div className="ch">✅ Completed today</div>
@@ -1514,6 +1658,44 @@ export default function WattsHub(){
     </div></div>);
   }
 
+  function PoolEditModalComp(){
+    const c=poolEditModal;
+    const[f,setF]=useState({
+      title:c.title||"",
+      freq:c.freq||(c.recurring?"weekly":""),
+      priceCents:c.priceCents||25,
+      note:c.note||"",
+      recurring:c.recurring!==undefined?!!c.recurring:!!c.freq,
+    });
+    function save(){
+      if(!f.title.trim())return;
+      const patch={title:f.title.trim(),priceCents:f.priceCents,note:f.note,recurring:f.recurring};
+      if(f.recurring&&f.freq){patch.freq=f.freq;patch.intervalDays=INTERVAL_DAYS[f.freq]||7;}
+      updatePoolChore(c.id,patch);
+      setPoolEditModal(null);
+    }
+    return(<div className="overlay" onClick={()=>setPoolEditModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
+      <div className="modal-h">✏️ Edit Pool Chore</div>
+      <div className="fg"><label className="fl">Title</label><input className="fi" value={f.title} onChange={e=>setF(x=>({...x,title:e.target.value}))}/></div>
+      <div style={{display:"flex",gap:8}}>
+        <div className="fg" style={{flex:1}}><label className="fl">Frequency</label>
+          <select className="fi" value={f.recurring?f.freq:"none"} onChange={e=>{const v=e.target.value;if(v==="none")setF(x=>({...x,recurring:false}));else setF(x=>({...x,recurring:true,freq:v}));}}>
+            <option value="none">One-time / on demand</option>
+            {FREQ_OPTS.map(o=><option key={o} value={o}>{FREQ_LBL[o]}</option>)}
+          </select></div>
+        <div className="fg" style={{flex:1}}><label className="fl">Amount ($)</label>
+          <input className="fi" type="number" step="0.05" min="0" value={(f.priceCents/100).toFixed(2)} onChange={e=>setF(x=>({...x,priceCents:Math.round(parseFloat(e.target.value)*100)||25}))}/></div>
+      </div>
+      {f.recurring&&f.freq&&<div style={{fontSize:11,color:"var(--tx2)",marginTop:-4,marginBottom:8}}>Resets every {INTERVAL_DAYS[f.freq]} day(s) after it's completed.</div>}
+      <div className="fg"><label className="fl">Note (optional)</label><input className="fi" value={f.note} onChange={e=>setF(x=>({...x,note:e.target.value}))}/></div>
+      <div className="fax">
+        <button className="btn bco" onClick={()=>{removePoolChore(c.id);setPoolEditModal(null);}}>Delete</button>
+        <button className="btn bg" onClick={()=>setPoolEditModal(null)}>Cancel</button>
+        <button className="btn bp" onClick={save}>Save</button>
+      </div>
+    </div></div>);
+  }
+
   function ParentTaskModalComp(){
     const[desc,setDesc]=useState("");
     const[who,setWho]=useState(parentTaskModal?.parentId||parents[0]?.id);
@@ -1716,7 +1898,7 @@ export default function WattsHub(){
   if(screen==="pin-verify")return(<><style>{CSS}</style><PINScreen mode="verify" onSuccess={enterParent} onBack={()=>setScreen("picker")}/></>);
   if(screen==="kid")return(<><style>{CSS}</style><ErrBound><KidModeApp/></ErrBound>
     {choreModal&&<ChoreModalComp/>}{editCompModal&&<EditCompModalComp/>}{parentTaskModal&&<ParentTaskModalComp/>}
-    {poolAddModal&&<PoolAddModalComp/>}{bonusModal&&<BonusModal/>}{noteModal&&<NoteModal/>}<Toasts/></>);
+    {poolAddModal&&<PoolAddModalComp/>}{poolEditModal&&<PoolEditModalComp/>}{bonusModal&&<BonusModal/>}{noteModal&&<NoteModal/>}<Toasts/></>);
 
   /* Parent app */
   const NAV=[
@@ -1749,6 +1931,7 @@ export default function WattsHub(){
     {billModal&&<BillModalComp/>}
     {payBillModal&&<PayBillModalComp/>}
     {poolAddModal&&<PoolAddModalComp/>}
+    {poolEditModal&&<PoolEditModalComp/>}
     {parentTaskModal&&<ParentTaskModalComp/>}
     {bonusModal&&<BonusModal/>}
     {noteModal&&<NoteModal/>}
