@@ -1066,9 +1066,16 @@ export default function WattsHub(){
             const gpct=Math.min(100,Math.round((earned/goal)*100));
             const sk=sumKids[k.id];
             const kidBills=bills.filter(b=>b.kidId===k.id&&b.active);
-            const bal2=k.balanceCents||0;
             const totalBills=kidBills.reduce((a,b)=>a+(b.amountCents||0),0);
-            const monthPaid=bal2; // show current balance vs total bills due
+            /* Monthly bill tracker: fills as the kid's balance covers this month's
+               bill; once the bill is actually paid (billPay this month) it flips to
+               a savings bar. Resets to tracking at the start of each month. */
+            const paidThisMonth=billProgress(k.id);
+            const billPaid=totalBills>0&&paidThisMonth>=totalBills;
+            const savingMode=totalBills===0||billPaid;
+            const billPct=totalBills>0?Math.min(100,Math.round((bal/totalBills)*100)):0;
+            const billReady=totalBills>0&&bal>=totalBills;
+            const moName=new Date().toLocaleDateString("en-US",{month:"short"});
             return(
               <div key={k.id} className="kcard" style={{background:"var(--sur)",border:"1px solid var(--bdr)",borderRadius:14,padding:16,cursor:"pointer",transition:"box-shadow .15s"}}
                 onMouseEnter={e=>e.currentTarget.style.boxShadow="0 4px 12px rgba(0,0,0,.08)"}
@@ -1093,15 +1100,14 @@ export default function WattsHub(){
                   </div>
                   <div className="pbar"><div className="pbar-f" style={{width:`${gpct}%`,background:gpct>=100?"var(--gr)":pal.a}}/></div>
                 </div>
-                {totalBills>0&&(
-                  <div style={{marginBottom:8}}>
-                    <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"var(--tx2)",marginBottom:3}}>
-                      <span>Saved {c$(monthPaid)} / {c$(totalBills)} due Jul 1</span>
-                      <span style={{color:monthPaid>=totalBills?"var(--gr)":"var(--am)",fontWeight:700}}>{Math.round((monthPaid/totalBills)*100)}%</span>
-                    </div>
-                    <div className="pbar"><div className="pbar-f" style={{width:`${Math.min(100,Math.round((monthPaid/totalBills)*100))}%`,background:monthPaid>=totalBills?"var(--gr)":"var(--am)"}}/></div>
+                <div style={{marginBottom:8}}>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"var(--tx2)",marginBottom:3}}>
+                    {savingMode
+                      ? <><span>{billPaid?`✓ ${moName} bill paid · Saving`:"Saving"} {c$(bal)}</span><span style={{color:"var(--gr)",fontWeight:700}}>🐷</span></>
+                      : <><span>{moName} bill {c$(bal)} / {c$(totalBills)}</span><span style={{color:billReady?"var(--gr)":"var(--am)",fontWeight:700}}>{billReady?"ready ✓":`${billPct}%`}</span></>}
                   </div>
-                )}
+                  <div className="pbar"><div className="pbar-f" style={{width:savingMode?"100%":`${billPct}%`,background:savingMode||billReady?"var(--gr)":"var(--am)"}}/></div>
+                </div>
                 <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
                   {sk&&(sk.totalSessionsCompleted||0)>0&&<span className="chip">☀️ {sk.totalSessionsCompleted} sessions</span>}
                   {parentMode&&<button className="btn bte bxs" style={{marginLeft:"auto"}} onClick={e=>{e.stopPropagation();setBonusModal({kidId:k.id,kidName:k.name});}}>🌟</button>}
