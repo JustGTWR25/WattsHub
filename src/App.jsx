@@ -720,6 +720,27 @@ export default function WattsHub(){
     toast(isParentActor?`✓ Pool chore done: ${chore.title}`:`+${c$(cents)} — pool chore complete!`,"success");
   }
 
+  async function uncompletePool(choreId){
+    const chore=pool.find(p=>p.id===choreId);
+    if(!chore)return;
+    const earner=chore.completedBy;
+    const cents=chore.priceCents||25;
+    const kid=earner?kidById(earner):null;
+    const upd={
+      [`wh/pool/${choreId}/completedBy`]:null,
+      [`wh/pool/${choreId}/completedAt`]:null,
+      [`wh/pool/${choreId}/lastCompletedAt`]:null,   // due/available again
+      [`wh/pool/${choreId}/claimedBy`]:null,
+      [`wh/pool/${choreId}/claimedAt`]:null,
+    };
+    if(kid){
+      upd[`wh/kids/${earner}/balanceCents`]=Math.max(0,(kid.balanceCents||0)-cents);
+      upd[`wh/txlog/${tkid(earner)}`]={actorId:earner,type:"chore_undo",cents:-cents,desc:`Unchecked pool: ${chore.title}`,ts:Date.now()};
+    }
+    await FB.atomic(upd);
+    toast(`${chore.title} unchecked${kid?` (-${c$(cents)})`:""} — back in the pool`,"warn");
+  }
+
   async function logParentTask(parentId,desc){
     const dk=ld();
     const id=`${Date.now()}_${uid6()}`;
@@ -939,7 +960,7 @@ export default function WattsHub(){
     const myClaimed=myClaimedPool(actorId);
     const available=pool.filter(p=>!p.claimedBy&&isPoolDue(p));
     const resting=pool.filter(p=>!p.claimedBy&&p.recurring&&!isPoolDue(p));
-    const done=pool.filter(p=>p.completedBy===actorId&&p.completedAt&&new Date(p.completedAt).toLocaleDateString("en-CA")===ld());
+    const done=pool.filter(p=>!p.recurring&&p.completedBy&&p.completedAt&&new Date(p.completedAt).toLocaleDateString("en-CA")===ld()&&(showManage||p.completedBy===actorId));
     const FreqPill=({c})=>c&&c.freq?<span className="cdiff" style={{background:"#EEF2FF",color:"#4338CA"}}>{FREQ_LBL[c.freq]||c.freq}</span>:<span className={`cdiff d${c.diff?.[0]||"e"}`}>{c.diff||"easy"}</span>;
     return(
       <div>
@@ -987,31 +1008,39 @@ export default function WattsHub(){
         {resting.length>0&&(
           <div className="card" style={{marginBottom:12}}>
             <div className="ch">😴 Scheduled (resting)</div>
-            {resting.map(p=>(
+            {resting.map(p=>{
+              const by=(kidById(p.completedBy)||parById(p.completedBy))?.name;
+              const canUndo=(showManage||p.completedBy===actorId)&&p.completedBy;
+              return(
               <div key={p.id} className="ccard">
                 <div className="cchk"/>
                 <div style={{flex:1}}>
                   <div className="ctitle">{p.title}</div>
-                  <div style={{fontSize:11,color:"var(--tx2)"}}>{p.area?p.area+" · ":""}{dueLabel(p)}</div>
+                  <div style={{fontSize:11,color:"var(--tx2)"}}>{p.area?p.area+" · ":""}{by?`done by ${by} · `:""}{dueLabel(p)}</div>
                 </div>
                 <FreqPill c={p}/>
                 <span className="cprice">{c$(p.priceCents||25)}</span>
-                {showManage&&<div onClick={e=>e.stopPropagation()} style={{display:"flex",gap:4}}>
-                  <button className="btn bg bxs" onClick={()=>setPoolEditModal(p)}>✏️</button>
-                  <button className="btn bco bxs" onClick={()=>removePoolChore(p.id)}>🗑</button>
-                </div>}
+                <div onClick={e=>e.stopPropagation()} style={{display:"flex",gap:4}}>
+                  {canUndo&&<button className="btn bg bxs" onClick={()=>uncompletePool(p.id)}>↩︎ Undo</button>}
+                  {showManage&&<button className="btn bg bxs" onClick={()=>setPoolEditModal(p)}>✏️</button>}
+                  {showManage&&<button className="btn bco bxs" onClick={()=>removePoolChore(p.id)}>🗑</button>}
+                </div>
               </div>
-            ))}
+            );})}
           </div>
         )}
         {done.length>0&&(
           <div className="card">
             <div className="ch">✅ Completed today</div>
-            {done.map(p=><div key={p.id} className="ccard done">
+            {done.map(p=>{
+              const by=(kidById(p.completedBy)||parById(p.completedBy))?.name;
+              const canUndo=showManage||p.completedBy===actorId;
+              return(<div key={p.id} className="ccard done">
               <div className="cchk done"><span style={{color:"#fff",fontWeight:900,fontSize:12}}>✓</span></div>
-              <div className="ctitle">{p.title}</div>
+              <div style={{flex:1}}><div className="ctitle">{p.title}</div>{by&&<div style={{fontSize:11,color:"var(--tx2)"}}>by {by}</div>}</div>
               <span className="cprice">{c$(p.priceCents||25)}</span>
-            </div>)}
+              {canUndo&&<button className="btn bg bxs" onClick={()=>uncompletePool(p.id)}>↩︎ Undo</button>}
+            </div>);})}
           </div>
         )}
       </div>
