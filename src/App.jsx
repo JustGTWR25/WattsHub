@@ -553,10 +553,36 @@ export default function WattsHub(){
   /* Claimed pool chore for an actor */
   const myClaimedPool=(actorId)=>pool.find(p=>p.claimedBy===actorId);
 
-  /* Weekly earned cents for a kid (from txlog) */
-  const weekEarned=(kidId,weekKey)=>{
-    /* FIX: transactions written with actorId field, not kidId */
-    return txLog.filter(tx=>(tx.actorId===kidId||tx.kidId===kidId)&&(tx.type==="chore"||tx.type==="pool"||tx.type==="summer_bonus")&&wk(new Date(tx.ts).toLocaleDateString("en-CA"))===weekKey&&tx.cents>0).reduce((a,tx)=>a+(tx.cents||0),0);
+  /* Earning-related tx types. weekEarned is NET (includes undos/corrections) so
+     it matches what actually reached the balance — a gross sum overstates after
+     a chore is unchecked or a completion is corrected. */
+  const EARN_TYPES=new Set(["chore","pool","summer_bonus","bonus","chore_undo","correction"]);
+  const weekEarned=(kidId,weekKey)=>
+    txLog.filter(tx=>(tx.actorId===kidId||tx.kidId===kidId)&&EARN_TYPES.has(tx.type)&&wk(new Date(tx.ts).toLocaleDateString("en-CA"))===weekKey).reduce((a,tx)=>a+(tx.cents||0),0);
+
+  /* Parent contributions in a period: chores + pool chores completed by a parent,
+     plus manually-logged tasks. cents = value those tasks would have paid a kid
+     (i.e. dollars saved). Derived from existing records so it auto-corrects on undo. */
+  const parentContrib=(parentId,key,isWeek)=>{
+    let cents=0,tasks=0;
+    Object.entries(comps).forEach(([dk,entries])=>{
+      const inP=isWeek?wk(dk)===key:mk(dk)===key;
+      if(!inP)return;
+      Object.values(entries||{}).forEach(cp=>{
+        if(cp&&cp.isParentActor&&cp.actorId===parentId&&(cp.status==="done"||cp.status==="approved")){cents+=(cp.cents||0);tasks++;}
+      });
+    });
+    pool.forEach(p=>{
+      if(p.completedBy!==parentId||!p.completedAt)return;
+      const dks=new Date(p.completedAt).toLocaleDateString("en-CA");
+      if(isWeek?wk(dks)===key:mk(dks)===key){cents+=(p.priceCents||0);tasks++;}
+    });
+    Object.entries(parentLog).forEach(([dk,logs])=>{
+      const inP=isWeek?wk(dk)===key:mk(dk)===key;
+      if(!inP)return;
+      Object.values(logs||{}).forEach(l=>{if(l&&l.parentId===parentId){tasks++;cents+=(l.cents||0);}});
+    });
+    return {cents,tasks};
   };
 
   /* Bill progress for current month */
@@ -583,16 +609,18 @@ export default function WattsHub(){
     const existing=getComp(dk,choreId,actorId);
     setOptim(o=>({...o,[key]:true}));
     try{
-      if(existing?.status==="done"){
-        /* Uncheck — reverse money */
+      if(existing&&(existing.status==="done"||existing.status==="approved"||existing.status==="pending")){
+        /* Uncheck — reverse money only if it was already paid out.
+           done/approved were paid; pending was sent for approval but never paid. */
+        const wasPaid=existing.status==="done"||existing.status==="approved";
         const cents=existing.cents||chore.priceCents||25;
         const upd={[`wh/comps/${dk}/${key}`]:null};
-        if(!isParentActor&&kid){
+        if(wasPaid&&!isParentActor&&kid){
           upd[`wh/kids/${actorId}/balanceCents`]=Math.max(0,(kid.balanceCents||0)-cents);
           upd[`wh/txlog/${tkid(actorId)}`]={actorId,type:"chore_undo",cents:-cents,desc:`Unchecked: ${chore.title}`,ts:Date.now()};
         }
         await FB.atomic(upd);
-        toast(`${chore.title} unchecked${!isParentActor?` (-${c$(cents)})`:""}`, "warn");
+        toast(`${chore.title} unchecked${wasPaid&&!isParentActor?` (-${c$(cents)})`:""}`, "warn");
       }else if(!existing||existing.status==="none"){
         const status=chore.requiresApproval?"pending":"done";
         const cents=chore.priceCents||25;
@@ -1058,18 +1086,19 @@ export default function WattsHub(){
         {/* Parent contributions */}
         <div style={{marginTop:14}}>
           <div className="card">
-            <div className="ch">👨‍👩‍👧‍👦 Parent contributions this week</div>
+            <div className="ch" style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span>👨‍👩‍👧‍👦 Parent contributions this week</span>
+              {parentMode&&<span style={{color:"var(--gr)",fontWeight:800}}>{c$(parents.reduce((a,p)=>a+parentContrib(p.id,curWk,true).cents,0))} saved</span>}
+            </div>
             <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
               {parents.map(p=>{
-                const dk=ld();
-                const thisWeek=Object.entries(parentLog).filter(([d])=>wk(d)===curWk).flatMap(([,logs])=>Object.values(logs||{}).filter(l=>l.parentId===p.id));
-                const pal=PAL[p.colorIdx%PAL.length];
+                const {cents,tasks}=parentContrib(p.id,curWk,true);
                 return(
                   <div key={p.id} style={{display:"flex",alignItems:"center",gap:8,flex:1,minWidth:160}}>
                     <Av initials={p.initials} colorIdx={p.colorIdx} size={32}/>
                     <div>
                       <div style={{fontSize:13,fontWeight:700}}>{p.name}</div>
-                      <div style={{fontSize:12,color:"var(--tx2)"}}>{thisWeek.length} task{thisWeek.length!==1?"s":""} this week</div>
+                      <div style={{fontSize:12,color:"var(--tx2)"}}>{tasks} task{tasks!==1?"s":""} this week{parentMode&&cents>0?` · ${c$(cents)} saved`:""}</div>
                     </div>
                   </div>
                 );
@@ -1107,8 +1136,10 @@ export default function WattsHub(){
         </div>
         <div className="dgrid" style={{marginBottom:14}}>
           {kids.map(k=>{
-            const kTx=periodTx.filter(tx=>tx.actorId===k.id&&tx.cents>0);
-            const total=kTx.reduce((a,tx)=>a+(tx.cents||0),0);
+            const kTx=periodTx.filter(tx=>tx.actorId===k.id&&EARN_TYPES.has(tx.type));
+            const gross=kTx.filter(tx=>tx.cents>0).reduce((a,tx)=>a+(tx.cents||0),0);
+            const adj=kTx.filter(tx=>tx.cents<0).reduce((a,tx)=>a+(tx.cents||0),0);
+            const total=gross+adj;
             const pal=PAL[k.colorIdx%PAL.length];
             return(
               <div key={k.id} style={{background:"var(--sur)",border:"1px solid var(--bdr)",borderRadius:12,overflow:"hidden"}}>
@@ -1120,12 +1151,13 @@ export default function WattsHub(){
                   <span style={{fontSize:16,fontWeight:900,color:pal.a}}>{c$(total)}</span>
                 </div>
                 <div style={{padding:"8px 14px"}}>
+                  {adj<0&&<div style={{fontSize:11,color:"var(--tx2)",marginBottom:6}}>Earned {c$(gross)} · adjustments {c$(adj)} · <strong>net {c$(total)}</strong></div>}
                   {kTx.length===0?<div style={{fontSize:12,color:"var(--tx3)"}}>No earnings this period.</div>:(
                     kTx.slice(0,8).map((tx,i)=>(
                       <div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:12,padding:"4px 0",borderBottom:"1px solid var(--bdr)"}}>
                         <span style={{color:"var(--tx2)"}}>{new Date(tx.ts).toLocaleDateString("en-US",{month:"short",day:"numeric"})}</span>
                         <span style={{flex:1,marginLeft:8,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{tx.desc}</span>
-                        <span style={{color:"var(--gr)",fontWeight:700,marginLeft:8}}>{c$(tx.cents)}</span>
+                        <span style={{color:tx.cents<0?"#DC2626":"var(--gr)",fontWeight:700,marginLeft:8}}>{c$(tx.cents)}</span>
                         {parentMode&&<button className="btn bam bxs" style={{marginLeft:6}} onClick={()=>{const dk=new Date(tx.ts).toLocaleDateString("en-CA");setEditCompModal({dk,choreId:tx.desc,actorId:tx.actorId,comp:{cents:tx.cents},fromTx:tx});}}>✏️</button>}
                       </div>
                     ))
@@ -1139,9 +1171,10 @@ export default function WattsHub(){
         <div className="card">
           <div className="ch">Parent tasks</div>
           {parents.map(p=>{
+            const {cents:pSaved,tasks:pCount}=parentContrib(p.id,period==="week"?selWk:selMk,period==="week");
             const pTasks=Object.entries(parentLog).filter(([d])=>period==="week"?wk(d)===selWk:mk(d)===selMk).flatMap(([,logs])=>Object.values(logs||{}).filter(l=>l.parentId===p.id));
             return(<div key={p.id} style={{marginBottom:10}}>
-              <div style={{fontSize:13,fontWeight:700,marginBottom:4}}>{p.name} — {pTasks.length} tasks</div>
+              <div style={{fontSize:13,fontWeight:700,marginBottom:4}}>{p.name} — {pCount} task{pCount!==1?"s":""}{parentMode?` · ${c$(pSaved)} saved`:""}</div>
               {pTasks.slice(0,5).map((t,i)=>(
                 <div key={i} style={{display:"flex",gap:8,fontSize:12,color:"var(--tx2)",padding:"3px 0"}}>
                   <span>{new Date(t.ts).toLocaleDateString("en-US",{month:"short",day:"numeric"})}</span>
@@ -1660,8 +1693,10 @@ export default function WattsHub(){
 
   function PoolEditModalComp(){
     const c=poolEditModal;
+    const AREAS=Array.from(new Set(pool.map(p=>p.area).filter(Boolean))).sort();
     const[f,setF]=useState({
       title:c.title||"",
+      area:c.area||"",
       freq:c.freq||(c.recurring?"weekly":""),
       priceCents:c.priceCents||25,
       note:c.note||"",
@@ -1669,7 +1704,7 @@ export default function WattsHub(){
     });
     function save(){
       if(!f.title.trim())return;
-      const patch={title:f.title.trim(),priceCents:f.priceCents,note:f.note,recurring:f.recurring};
+      const patch={title:f.title.trim(),area:f.area.trim(),priceCents:f.priceCents,note:f.note,recurring:f.recurring};
       if(f.recurring&&f.freq){patch.freq=f.freq;patch.intervalDays=INTERVAL_DAYS[f.freq]||7;}
       updatePoolChore(c.id,patch);
       setPoolEditModal(null);
@@ -1687,6 +1722,10 @@ export default function WattsHub(){
           <input className="fi" type="number" step="0.05" min="0" value={(f.priceCents/100).toFixed(2)} onChange={e=>setF(x=>({...x,priceCents:Math.round(parseFloat(e.target.value)*100)||25}))}/></div>
       </div>
       {f.recurring&&f.freq&&<div style={{fontSize:11,color:"var(--tx2)",marginTop:-4,marginBottom:8}}>Resets every {INTERVAL_DAYS[f.freq]} day(s) after it's completed.</div>}
+      <div className="fg"><label className="fl">Room / area</label>
+        <input className="fi" list="poolAreas" placeholder="e.g. Kitchen" value={f.area} onChange={e=>setF(x=>({...x,area:e.target.value}))}/>
+        <datalist id="poolAreas">{AREAS.map(a=><option key={a} value={a}/>)}</datalist>
+      </div>
       <div className="fg"><label className="fl">Note (optional)</label><input className="fi" value={f.note} onChange={e=>setF(x=>({...x,note:e.target.value}))}/></div>
       <div className="fax">
         <button className="btn bco" onClick={()=>{removePoolChore(c.id);setPoolEditModal(null);}}>Delete</button>
