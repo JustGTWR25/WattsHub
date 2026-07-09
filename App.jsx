@@ -2,13 +2,13 @@ import{useState,useEffect,useRef,useCallback,useMemo,Component}from"react";
 
 /* ─── FIREBASE ────────────────────────────────────────────── */
 let _db=null,_auth=null;
-let _ref,_set,_update,_onValue,_off,_remove,_push,_signInAnon,_onAuthState;
+let _ref,_set,_update,_onValue,_off,_remove,_push,_increment,_signInAnon,_onAuthState;
 async function bootFirebase(cfg){
   try{
     const[fa,fd,fauth]=await Promise.all([import("https://esm.sh/firebase/app"),import("https://esm.sh/firebase/database"),import("https://esm.sh/firebase/auth")]);
     const app=fa.getApps().length?fa.getApp():fa.initializeApp(cfg);
     _db=fd.getDatabase(app);_auth=fauth.getAuth(app);
-    _ref=fd.ref;_set=fd.set;_update=fd.update;_onValue=fd.onValue;_off=fd.off;_remove=fd.remove;_push=fd.push;
+    _ref=fd.ref;_set=fd.set;_update=fd.update;_onValue=fd.onValue;_off=fd.off;_remove=fd.remove;_push=fd.push;_increment=fd.increment;
     _signInAnon=fauth.signInAnonymously;_onAuthState=fauth.onAuthStateChanged;
     return true;
   }catch(e){console.warn("Firebase boot failed",e);return false;}
@@ -52,6 +52,37 @@ const wk=d=>{const dt=lp(d),j=new Date(dt.getFullYear(),0,1),n=Math.ceil(((dt-j)
 const mk=d=>{const dt=lp(d);return`${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}`;};
 const uid6=()=>Math.random().toString(36).slice(2,8);
 const tkid=(id)=>`tx_${Date.now()}_${id}_${uid6()}`;
+/* Server-side delta for balanceCents. Concurrent writes from multiple devices
+   compose instead of clobbering each other (fixes bonuses/earnings vanishing). */
+const inc=(n)=>_increment(n);
+
+/* ─── BONUS MODAL (top-level so it never remounts mid-typing) ── */
+function BonusModalC({m,onClose,onGive}){
+  const[amt,setAmt]=useState("0.50");
+  const[note,setNote]=useState("");
+  if(!m)return null;
+  const cents=Math.round(parseFloat(amt)*100);
+  const valid=note.trim()&&Number.isFinite(cents)&&cents>0;
+  return(<div className="overlay" onClick={onClose}><div className="modal" onClick={e=>e.stopPropagation()}>
+    <div className="modal-h">🌟 Give Bonus — {m.kidName}</div>
+    <div className="fg"><label className="fl">Amount ($)</label>
+      <div className="frow">
+        {["0.25","0.50","1.00","2.00","5.00"].map(v=>(
+          <button key={v} className={`btn bsm ${amt===v?"bp":"bg"}`} onClick={()=>setAmt(v)}>${v}</button>
+        ))}
+      </div>
+      <input className="fi" style={{marginTop:6}} type="number" step="0.25" min="0.01" value={amt} onChange={e=>setAmt(e.target.value)}/>
+    </div>
+    <div className="fg"><label className="fl">Reason (shown in transaction log)</label>
+      <input className="fi" placeholder="Great attitude, helped without being asked..." value={note} onChange={e=>setNote(e.target.value)}/></div>
+    <div className="fax">
+      <button className="btn bg" onClick={onClose}>Cancel</button>
+      <button className="btn bp" disabled={!valid} onClick={()=>{onGive(m.kidId,m.kidName,cents,note);onClose();}}>
+        Give +{Number.isFinite(cents)&&cents>0?`$${(cents/100).toFixed(2)}`:""}
+      </button>
+    </div>
+  </div></div>);
+}
 const c$=(v)=>`$${(Math.round(v||0)/100).toFixed(2)}`;
 const DOW=d=>lp(d).toLocaleDateString("en-US",{weekday:"short"});
 const DAYS=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
@@ -560,6 +591,32 @@ export default function WattsHub(){
   const weekEarned=(kidId,weekKey)=>
     txLog.filter(tx=>(tx.actorId===kidId||tx.kidId===kidId)&&EARN_TYPES.has(tx.type)&&wk(new Date(tx.ts).toLocaleDateString("en-CA"))===weekKey).reduce((a,tx)=>a+(tx.cents||0),0);
 
+  /* Net earnings this month (same tx types as weekEarned, bucketed by month) */
+  const monthEarned=(kidId,monthKey)=>
+    txLog.filter(tx=>(tx.actorId===kidId||tx.kidId===kidId)&&EARN_TYPES.has(tx.type)&&mk(new Date(tx.ts).toLocaleDateString("en-CA"))===monthKey).reduce((a,tx)=>a+(tx.cents||0),0);
+
+  /* Value of assigned chores still completable from today through month-end.
+     Walks each remaining day, sums scheduled chores assigned to the kid
+     (respecting per-date overrides), skipping any already done/pending today.
+     Pool chores are excluded — they're first-come, not assigned. */
+  const remainingAssignedCents=(kidId)=>{
+    const start=lp(ld());
+    const end=new Date(start.getFullYear(),start.getMonth()+1,0);
+    let cents=0;
+    for(const d=new Date(start);d<=end;d.setDate(d.getDate()+1)){
+      const ds=d.toLocaleDateString("en-CA");
+      chores.forEach(c=>{
+        const ov=getOverride(c,ds);
+        const assigned=ov?.assignedTo||(c.assignedTo||[]);
+        if(!assigned.includes(kidId)||!isScheduled(c,ds))return;
+        const comp=getComp(ds,c.id,kidId);
+        if(comp&&comp.status&&comp.status!=="none")return; /* already logged */
+        cents+=(c.priceCents||25);
+      });
+    }
+    return cents;
+  };
+
   /* Parent contributions in a period: chores + pool chores completed by a parent,
      plus manually-logged tasks. cents = value those tasks would have paid a kid
      (i.e. dollars saved). Derived from existing records so it auto-corrects on undo. */
@@ -616,7 +673,7 @@ export default function WattsHub(){
         const cents=existing.cents||chore.priceCents||25;
         const upd={[`wh/comps/${dk}/${key}`]:null};
         if(wasPaid&&!isParentActor&&kid){
-          upd[`wh/kids/${actorId}/balanceCents`]=Math.max(0,(kid.balanceCents||0)-cents);
+          upd[`wh/kids/${actorId}/balanceCents`]=inc(-cents);
           upd[`wh/txlog/${tkid(actorId)}`]={actorId,type:"chore_undo",cents:-cents,desc:`Unchecked: ${chore.title}`,ts:Date.now()};
         }
         await FB.atomic(upd);
@@ -627,7 +684,7 @@ export default function WattsHub(){
         const isPastDay=dk!==ld();
         const upd={[`wh/comps/${dk}/${key}`]:{status,ts:Date.now(),choreId,actorId,cents,isParentActor:!!isParentActor,date:dk}};
         if(status==="done"&&!isParentActor&&kid){
-          upd[`wh/kids/${actorId}/balanceCents`]=(kid.balanceCents||0)+cents;
+          upd[`wh/kids/${actorId}/balanceCents`]=inc(cents);
           upd[`wh/txlog/${tkid(actorId)}`]={actorId,type:"chore",cents,desc:chore.title+(isPastDay?` (${dk})`:""),ts:Date.now()};
         }
         await FB.atomic(upd);
@@ -646,7 +703,7 @@ export default function WattsHub(){
     await FB.atomic({
       [`wh/comps/${dk}/${choreId}_${actorId}/status`]:"approved",
       [`wh/comps/${dk}/${choreId}_${actorId}/approvedAt`]:Date.now(),
-      [`wh/kids/${actorId}/balanceCents`]:(kid.balanceCents||0)+cents,
+      [`wh/kids/${actorId}/balanceCents`]:inc(cents),
       [`wh/txlog/${tkid(actorId)}`]:{actorId,type:"chore",cents,desc:chore.title+" (approved)",ts:Date.now()},
     });
     toast(`Approved +${c$(cents)} for ${kid.name}`,"success");
@@ -665,7 +722,7 @@ export default function WattsHub(){
     if(remove){
       await FB.atomic({
         [`wh/comps/${dk}/${choreId}_${actorId}`]:null,
-        [`wh/kids/${actorId}/balanceCents`]:Math.max(0,(kid.balanceCents||0)-origCents),
+        [`wh/kids/${actorId}/balanceCents`]:inc(-origCents),
         [`wh/txlog/${tkid(actorId)}`]:{actorId,type:"correction",cents:-origCents,desc:`Removed: ${comp.choreId||"chore"}${note?` — ${note}`:""}`,ts:Date.now()},
       });
       toast("Completion removed","warn");
@@ -675,7 +732,7 @@ export default function WattsHub(){
         [`wh/comps/${dk}/${choreId}_${actorId}/cents`]:newCents,
         [`wh/comps/${dk}/${choreId}_${actorId}/editNote`]:note||"",
         [`wh/comps/${dk}/${choreId}_${actorId}/editedAt`]:Date.now(),
-        [`wh/kids/${actorId}/balanceCents`]:(kid.balanceCents||0)+diff,
+        [`wh/kids/${actorId}/balanceCents`]:inc(diff),
         [`wh/txlog/${tkid(actorId)}`]:{actorId,type:"correction",cents:diff,desc:`Adjusted: ${comp.choreId||"chore"}${note?` — ${note}`:""}`,ts:Date.now()},
       });
       toast("Completion updated","success");
@@ -713,7 +770,7 @@ export default function WattsHub(){
       upd[`wh/pool/${choreId}/completedAt`]=null;
     }
     if(!isParentActor&&kid){
-      upd[`wh/kids/${actorId}/balanceCents`]=(kid.balanceCents||0)+cents;
+      upd[`wh/kids/${actorId}/balanceCents`]=inc(cents);
       upd[`wh/txlog/${tkid(actorId)}`]={actorId,type:"pool",cents,desc:`Pool: ${chore.title}`,ts:now};
     }
     await FB.atomic(upd);
@@ -734,7 +791,7 @@ export default function WattsHub(){
       [`wh/pool/${choreId}/claimedAt`]:null,
     };
     if(kid){
-      upd[`wh/kids/${earner}/balanceCents`]=Math.max(0,(kid.balanceCents||0)-cents);
+      upd[`wh/kids/${earner}/balanceCents`]=inc(-cents);
       upd[`wh/txlog/${tkid(earner)}`]={actorId:earner,type:"chore_undo",cents:-cents,desc:`Unchecked pool: ${chore.title}`,ts:Date.now()};
     }
     await FB.atomic(upd);
@@ -795,7 +852,7 @@ export default function WattsHub(){
     const id=`bp_${Date.now()}_${uid6()}`;
     const monthKey2=mk(ld());
     await FB.atomic({
-      [`wh/kids/${kidId}/balanceCents`]:(kid.balanceCents||0)-amountCents,
+      [`wh/kids/${kidId}/balanceCents`]:inc(-amountCents),
       [`wh/billPayments/${kidId}/${id}`]:{billId,amountCents,monthKey:monthKey2,date:ld(),ts:Date.now()},
       [`wh/txlog/${tkid(kidId)}`]:{actorId:kidId,type:"bill",cents:-amountCents,desc:`Bill payment`,ts:Date.now()},
     });
@@ -812,7 +869,7 @@ export default function WattsHub(){
     if(sessions.length<4){toast(`Only ${sessions.length}/4 sessions this week — bonus not earned`,"warn");return;}
     const bonus=100; // $1.00
     await FB.atomic({
-      [`wh/kids/${kidId}/balanceCents`]:(kid.balanceCents||0)+bonus,
+      [`wh/kids/${kidId}/balanceCents`]:inc(bonus),
       [`wh/summerProgram/kids/${kidId}/weekBonusPaidFor`]:weekK,
       [`wh/txlog/${tkid(kidId)}`]:{actorId:kidId,type:"summer_bonus",cents:bonus,desc:`Summer weekly bonus — week ${weekK}`,ts:Date.now()},
     });
@@ -861,11 +918,14 @@ export default function WattsHub(){
 
   async function giveBonus(kidId,kidName,amountCents,note){
     const kid=kidById(kidId);if(!kid)return;
+    if(!Number.isFinite(amountCents)||amountCents<=0){toast("Invalid bonus amount","err");return;}
     const upd={};
-    upd[`wh/kids/${kidId}/balanceCents`]=(kid.balanceCents||0)+amountCents;
+    upd[`wh/kids/${kidId}/balanceCents`]=inc(amountCents);
     upd[`wh/txlog/${tkid(kidId)}`]={actorId:kidId,type:"bonus",cents:amountCents,desc:`Bonus: ${note||"Great attitude!"}`,ts:Date.now()};
-    await FB.atomic(upd);
-    toast(`+${c$(amountCents)} bonus for ${kidName}! 🌟`,"success");
+    try{
+      await FB.atomic(upd);
+      toast(`+${c$(amountCents)} bonus for ${kidName}! 🌟`,"success");
+    }catch(e){toast("Bonus failed to save — check connection","err");}
   }
 
   async function saveNote(kidId,note){
@@ -875,7 +935,7 @@ export default function WattsHub(){
 
   async function awardXp(kidId,amt){
     const kid=kidById(kidId);if(!kid)return;
-    await FB.atomic({[`wh/kids/${kidId}/balanceCents`]:(kid.balanceCents||0)+amt,[`wh/txlog/${tkid(kidId)}`]:{actorId:kidId,type:"bonus",cents:amt,desc:"Focus timer bonus",ts:Date.now()}});
+    await FB.atomic({[`wh/kids/${kidId}/balanceCents`]:inc(amt),[`wh/txlog/${tkid(kidId)}`]:{actorId:kidId,type:"bonus",cents:amt,desc:"Focus timer bonus",ts:Date.now()}});
     toast(`+${c$(amt)} for ${kid.name}`,"success");
   }
 
@@ -924,7 +984,9 @@ export default function WattsHub(){
               const status=comp?.status||"none";
               const isDone=status==="done"||status==="approved";
               const pal=PAL[(actor.colorIdx||0)%PAL.length];
-              const canTap=!isDone||status==="done";
+              /* Everything is tappable: none→complete, pending→cancel,
+                 done/approved→uncheck (completeChore reverses the money). */
+              const canTap=true;
               return(
                 <div key={key} className={`ccard${isDone?" done":status==="pending"?" pend":isOpt?" opt":""}`}
                   onClick={()=>canTap&&completeChore(c.id,aId,isParentActor||!!parById(aId),selDate)}>
@@ -1076,6 +1138,11 @@ export default function WattsHub(){
             const billPct=totalBills>0?Math.min(100,Math.round((bal/totalBills)*100)):0;
             const billReady=totalBills>0&&bal>=totalBills;
             const moName=new Date().toLocaleDateString("en-US",{month:"short"});
+            /* Month-end projection: net earned so far + all remaining assigned chores */
+            const mEarned=monthEarned(k.id,mk(ld()));
+            const mRemaining=remainingAssignedCents(k.id);
+            const mProjected=mEarned+mRemaining;
+            const mPct=mProjected>0?Math.min(100,Math.round((Math.max(0,mEarned)/mProjected)*100)):0;
             return(
               <div key={k.id} className="kcard" style={{background:"var(--sur)",border:"1px solid var(--bdr)",borderRadius:14,padding:16,cursor:"pointer",transition:"box-shadow .15s"}}
                 onMouseEnter={e=>e.currentTarget.style.boxShadow="0 4px 12px rgba(0,0,0,.08)"}
@@ -1100,6 +1167,15 @@ export default function WattsHub(){
                   </div>
                   <div className="pbar"><div className="pbar-f" style={{width:`${gpct}%`,background:gpct>=100?"var(--gr)":pal.a}}/></div>
                 </div>
+                {parentMode&&(
+                  <div style={{marginBottom:8}}>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"var(--tx2)",marginBottom:3}}>
+                      <span>📈 {moName} {c$(mEarned)} → <strong style={{color:"var(--pr)"}}>{c$(mProjected)}</strong> projected</span>
+                      <span title={`${c$(mRemaining)} of assigned chores left this month`}>{c$(mRemaining)} left</span>
+                    </div>
+                    <div className="pbar"><div className="pbar-f" style={{width:`${mPct}%`,background:"var(--pr)"}}/></div>
+                  </div>
+                )}
                 <div style={{marginBottom:8}}>
                   <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"var(--tx2)",marginBottom:3}}>
                     {savingMode
@@ -1307,7 +1383,7 @@ export default function WattsHub(){
               onClick={async()=>{
                 if(!can)return;
                 const id=tkid(kidId||activeKid);
-                await FB.atomic({[`wh/kids/${kid.id}/balanceCents`]:bal-item.priceCents,[`wh/txlog/${id}`]:{actorId:kid.id,type:"purchase",cents:-item.priceCents,desc:item.name,ts:Date.now()}});
+                await FB.atomic({[`wh/kids/${kid.id}/balanceCents`]:inc(-item.priceCents),[`wh/txlog/${id}`]:{actorId:kid.id,type:"purchase",cents:-item.priceCents,desc:item.name,ts:Date.now()}});
                 toast(`Purchased: ${item.name}! 🎉`,"success");
               }}>
               <div style={{fontSize:28,marginBottom:6}}>{item.emoji}</div>
@@ -1786,31 +1862,9 @@ export default function WattsHub(){
   }
 
   /* Focus Timer */
-  function BonusModal(){
-    const m=bonusModal;
-    const[amt,setAmt]=useState("0.50");
-    const[note,setNote]=useState("");
-    if(!m)return null;
-    return(<div className="overlay" onClick={()=>setBonusModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
-      <div className="modal-h">🌟 Give Bonus — {m.kidName}</div>
-      <div className="fg"><label className="fl">Amount ($)</label>
-        <div className="frow">
-          {["0.25","0.50","1.00","2.00","5.00"].map(v=>(
-            <button key={v} className={`btn bsm ${amt===v?"bp":"bg"}`} onClick={()=>setAmt(v)}>${v}</button>
-          ))}
-        </div>
-        <input className="fi" style={{marginTop:6}} type="number" step="0.25" min="0.01" value={amt} onChange={e=>setAmt(e.target.value)}/>
-      </div>
-      <div className="fg"><label className="fl">Reason (shown in transaction log)</label>
-        <input className="fi" placeholder="Great attitude, helped without being asked..." value={note} onChange={e=>setNote(e.target.value)}/></div>
-      <div className="fax">
-        <button className="btn bg" onClick={()=>setBonusModal(null)}>Cancel</button>
-        <button className="btn bp" disabled={!note.trim()||parseFloat(amt)<=0} onClick={()=>{giveBonus(m.kidId,m.kidName,Math.round(parseFloat(amt)*100),note);setBonusModal(null);}}>
-          Give +{amt?`$${parseFloat(amt).toFixed(2)}`:""}
-        </button>
-      </div>
-    </div></div>);
-  }
+  /* BonusModal is hoisted to top level (BonusModalC) so App re-renders —
+     which happen on every Firebase update and toast — don't remount it and
+     silently reset the typed amount back to $0.50. */
 
   function NoteModal(){
     const m=noteModal;
@@ -1972,7 +2026,7 @@ export default function WattsHub(){
   if(screen==="pin-verify")return(<><style>{CSS}</style><PINScreen mode="verify" onSuccess={enterParent} onBack={()=>setScreen("picker")}/></>);
   if(screen==="kid")return(<><style>{CSS}</style><ErrBound><KidModeApp/></ErrBound>
     {choreModal&&<ChoreModalComp/>}{editCompModal&&<EditCompModalComp/>}{parentTaskModal&&<ParentTaskModalComp/>}
-    {poolAddModal&&<PoolAddModalComp/>}{poolEditModal&&<PoolEditModalComp/>}{bonusModal&&<BonusModal/>}{noteModal&&<NoteModal/>}<Toasts/></>);
+    {poolAddModal&&<PoolAddModalComp/>}{poolEditModal&&<PoolEditModalComp/>}{bonusModal&&<BonusModalC m={bonusModal} onClose={()=>setBonusModal(null)} onGive={giveBonus}/>}{noteModal&&<NoteModal/>}<Toasts/></>);
 
   /* Parent app */
   const NAV=[
@@ -2007,7 +2061,7 @@ export default function WattsHub(){
     {poolAddModal&&<PoolAddModalComp/>}
     {poolEditModal&&<PoolEditModalComp/>}
     {parentTaskModal&&<ParentTaskModalComp/>}
-    {bonusModal&&<BonusModal/>}
+    {bonusModal&&<BonusModalC m={bonusModal} onClose={()=>setBonusModal(null)} onGive={giveBonus}/>}
     {noteModal&&<NoteModal/>}
     {showTimer&&<FocusTimer/>}
 
