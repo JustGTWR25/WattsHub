@@ -1,15 +1,16 @@
 import{useState,useEffect,useRef,useCallback,useMemo,Component}from"react";
+import{initializeApp,getApps,getApp}from"firebase/app";
+import{getDatabase,ref as _ref,set as _set,update as _update,onValue as _onValue,off as _off,remove as _remove,push as _push,increment as _increment}from"firebase/database";
+import{getAuth,signInAnonymously as _signInAnon,onAuthStateChanged as _onAuthState}from"firebase/auth";
 
 /* ─── FIREBASE ────────────────────────────────────────────── */
+/* SDK is now bundled (npm `firebase` package) instead of fetched from esm.sh
+   at runtime — removes 1-3s of network latency on every page load. */
 let _db=null,_auth=null;
-let _ref,_set,_update,_onValue,_off,_remove,_push,_increment,_signInAnon,_onAuthState;
 async function bootFirebase(cfg){
   try{
-    const[fa,fd,fauth]=await Promise.all([import("https://esm.sh/firebase/app"),import("https://esm.sh/firebase/database"),import("https://esm.sh/firebase/auth")]);
-    const app=fa.getApps().length?fa.getApp():fa.initializeApp(cfg);
-    _db=fd.getDatabase(app);_auth=fauth.getAuth(app);
-    _ref=fd.ref;_set=fd.set;_update=fd.update;_onValue=fd.onValue;_off=fd.off;_remove=fd.remove;_push=fd.push;_increment=fd.increment;
-    _signInAnon=fauth.signInAnonymously;_onAuthState=fauth.onAuthStateChanged;
+    const app=getApps().length?getApp():initializeApp(cfg);
+    _db=getDatabase(app);_auth=getAuth(app);
     return true;
   }catch(e){console.warn("Firebase boot failed",e);return false;}
 }
@@ -55,6 +56,18 @@ const tkid=(id)=>`tx_${Date.now()}_${id}_${uid6()}`;
 /* Server-side delta for balanceCents. Concurrent writes from multiple devices
    compose instead of clobbering each other (fixes bonuses/earnings vanishing). */
 const inc=(n)=>_increment(n);
+
+/* ─── INSTANT-PAINT CACHE ─────────────────────────────────── */
+/* Last-known Firebase data is mirrored to localStorage so the app renders
+   real content immediately on load; live listeners overwrite within moments. */
+const CACHE_KEY="wh_cache_v1";
+const loadCache=()=>{try{return JSON.parse(localStorage.getItem(CACHE_KEY)||"null");}catch{return null;}};
+const CACHE0=loadCache();
+let _cBuf={},_cT=null;
+const saveCache=(k,v)=>{
+  _cBuf[k]=v;clearTimeout(_cT);
+  _cT=setTimeout(()=>{try{localStorage.setItem(CACHE_KEY,JSON.stringify({...(loadCache()||{}),..._cBuf}));_cBuf={};}catch{}},400);
+};
 
 /* ─── BONUS MODAL (top-level so it never remounts mid-typing) ── */
 function BonusModalC({m,onClose,onGive}){
@@ -474,17 +487,17 @@ export default function WattsHub(){
   const FB=useFirebase(fbCfg);
   const{ready,uid,online}=FB;
 
-  /* Data */
-  const[kids,setKids]=useState(SK);
-  const[parents,setParents]=useState(SP);
-  const[chores,setChores]=useState(SC);
-  const[pool,setPool]=useState([]);
-  const[comps,setComps]=useState({});
+  /* Data — hydrated instantly from the localStorage cache when available */
+  const[kids,setKids]=useState(CACHE0?.kids||SK);
+  const[parents,setParents]=useState(CACHE0?.parents||SP);
+  const[chores,setChores]=useState(CACHE0?.chores||SC);
+  const[pool,setPool]=useState(CACHE0?.pool||[]);
+  const[comps,setComps]=useState(CACHE0?.comps||{});
   const[parentLog,setParentLog]=useState({});
-  const[storeItems,setStoreItems]=useState([]);
-  const[txLog,setTxLog]=useState([]);
-  const[bills,setBills]=useState(SBILLS);
-  const[billPay,setBillPay]=useState({});
+  const[storeItems,setStoreItems]=useState(CACHE0?.store||[]);
+  const[txLog,setTxLog]=useState(CACHE0?.txlog||[]);
+  const[bills,setBills]=useState(CACHE0?.bills||SBILLS);
+  const[billPay,setBillPay]=useState(CACHE0?.billPay||{});
   const[allowedUids,setAllowedUids]=useState({});
   const[sumKids,setSumKids]=useState({});
   const[sumSessions,setSumSessions]=useState({});
@@ -525,16 +538,16 @@ export default function WattsHub(){
   useEffect(()=>{
     if(!ready)return;
     const u=[
-      FB.listen("wh/kids",          v=>{if(v)setKids(Object.values(v).filter(Boolean));}),
-      FB.listen("wh/parents",        v=>{if(v)setParents(Object.values(v).filter(Boolean));}),
-      FB.listen("wh/chores",         v=>{if(v)setChores(Object.values(v).filter(Boolean));}),
-      FB.listen("wh/pool",           v=>{if(v)setPool(Object.values(v).filter(Boolean));else setPool([]);}),
-      FB.listen("wh/comps",          v=>setComps(v||{})),
+      FB.listen("wh/kids",          v=>{if(v){const a=Object.values(v).filter(Boolean);setKids(a);saveCache("kids",a);}}),
+      FB.listen("wh/parents",        v=>{if(v){const a=Object.values(v).filter(Boolean);setParents(a);saveCache("parents",a);}}),
+      FB.listen("wh/chores",         v=>{if(v){const a=Object.values(v).filter(Boolean);setChores(a);saveCache("chores",a);}}),
+      FB.listen("wh/pool",           v=>{const a=v?Object.values(v).filter(Boolean):[];setPool(a);saveCache("pool",a);}),
+      FB.listen("wh/comps",          v=>{setComps(v||{});saveCache("comps",v||{});}),
       FB.listen("wh/parentLog",      v=>setParentLog(v||{})),
-      FB.listen("wh/store",          v=>{if(v)setStoreItems(Object.values(v).filter(Boolean));}),
-      FB.listen("wh/txlog",          v=>{if(v)setTxLog(Object.values(v).filter(Boolean).sort((a,b)=>b.ts-a.ts));}),
-      FB.listen("wh/bills",          v=>{if(v)setBills(Object.values(v).filter(Boolean));}),
-      FB.listen("wh/billPayments",   v=>setBillPay(v||{})),
+      FB.listen("wh/store",          v=>{if(v){const a=Object.values(v).filter(Boolean);setStoreItems(a);saveCache("store",a);}}),
+      FB.listen("wh/txlog",          v=>{if(v){const a=Object.values(v).filter(Boolean).sort((a2,b)=>b.ts-a2.ts);setTxLog(a);saveCache("txlog",a.slice(0,400));}}),
+      FB.listen("wh/bills",          v=>{if(v){const a=Object.values(v).filter(Boolean);setBills(a);saveCache("bills",a);}}),
+      FB.listen("wh/billPayments",   v=>{setBillPay(v||{});saveCache("billPay",v||{});}),
       FB.listen("wh/allowedUids",    v=>setAllowedUids(v||{})),
       FB.listen("wh/summerProgram/kids",v=>setSumKids(v||{})),
       FB.listen("wh/summerSessions", v=>setSumSessions(v||{})),
@@ -690,7 +703,7 @@ export default function WattsHub(){
         await FB.atomic(upd);
         toast(status==="done"?(isParentActor?`✓ Logged: ${chore.title}`:`+${c$(cents)} for ${kid?.name}!${isPastDay?" (past day)":""}`):`${chore.title} sent for approval`,"success");
       }
-    }catch(e){toast("Save failed — check connection","err");}
+    }catch(e){console.error("completeChore failed",e);toast(`Save failed: ${e?.code||e?.message||"unknown error"}`,"err");}
     finally{setOptim(o=>{const n={...o};delete n[key];return n;});}
   }
 
