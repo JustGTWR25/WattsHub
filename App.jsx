@@ -1,6 +1,9 @@
-import{useState,useEffect,useRef,useCallback,useMemo,Component}from"react";
+import{useState,useEffect,useRef,useCallback,useMemo,Component,createContext,useContext}from"react";
+
+const AppCtx=createContext(null);
+const useA=()=>useContext(AppCtx);
 import{initializeApp,getApps,getApp}from"firebase/app";
-import{getDatabase,ref as _ref,set as _set,update as _update,onValue as _onValue,off as _off,remove as _remove,push as _push,increment as _increment}from"firebase/database";
+import{getDatabase,ref as _ref,set as _set,update as _update,onValue as _onValue,off as _off,remove as _remove,push as _push,increment as _increment,query as _query,orderByChild as _obc,limitToLast as _ltl}from"firebase/database";
 import{getAuth,signInAnonymously as _signInAnon,onAuthStateChanged as _onAuthState}from"firebase/auth";
 
 /* ─── FIREBASE ────────────────────────────────────────────── */
@@ -40,10 +43,17 @@ function useFirebase(cfg){
     const u=()=>_off(r);
     subs.current.push(u);return u;
   },[state.db]);
+  const listenLast=useCallback((path,child,n,cb)=>{
+    if(!dbRef.current)return()=>{};
+    const q=_query(_ref(dbRef.current,path),_obc(child),_ltl(n));
+    _onValue(q,s=>cb(s.val()));
+    const u=()=>_off(_ref(dbRef.current,path));
+    subs.current.push(u);return u;
+  },[state.db]);
   const atomic=useCallback((upd)=>dbRef.current&&_update(_ref(dbRef.current),upd),[state.db]);
   const write=useCallback((p,v)=>dbRef.current&&_set(_ref(dbRef.current,p),v),[state.db]);
   const del=useCallback((p)=>dbRef.current&&_remove(_ref(dbRef.current,p)),[state.db]);
-  return{...state,listen,atomic,write,del};
+  return{...state,listen,listenLast,atomic,write,del};
 }
 
 /* ─── UTILS ───────────────────────────────────────────────── */
@@ -53,6 +63,9 @@ const wk=d=>{const dt=lp(d),j=new Date(dt.getFullYear(),0,1),n=Math.ceil(((dt-j)
 const mk=d=>{const dt=lp(d);return`${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}`;};
 const uid6=()=>Math.random().toString(36).slice(2,8);
 const tkid=(id)=>`tx_${Date.now()}_${id}_${uid6()}`;
+const nextMonthFirst=()=>{const n=new Date();return new Date(n.getFullYear(),n.getMonth()+1,1);};
+const nextDueLabel=()=>nextMonthFirst().toLocaleDateString("en-US",{month:"short",day:"numeric"});
+const eodTs=()=>{const d=new Date();d.setHours(23,59,59,999);return d.getTime();};
 /* Server-side delta for balanceCents. Concurrent writes from multiple devices
    compose instead of clobbering each other (fixes bonuses/earnings vanishing). */
 const inc=(n)=>_increment(n);
@@ -492,6 +505,7 @@ export default function WattsHub(){
   const[parents,setParents]=useState(CACHE0?.parents||SP);
   const[chores,setChores]=useState(CACHE0?.chores||SC);
   const[pool,setPool]=useState(CACHE0?.pool||[]);
+  const[combos,setCombos]=useState(CACHE0?.combos||[]);
   const[comps,setComps]=useState(CACHE0?.comps||{});
   const[parentLog,setParentLog]=useState({});
   const[storeItems,setStoreItems]=useState(CACHE0?.store||[]);
@@ -524,6 +538,8 @@ export default function WattsHub(){
   const[showTimer,setShowTimer]=useState(false);
   const[bonusModal,setBonusModal]=useState(null); // {kidId, kidName}
   const[noteModal,setNoteModal]=useState(null);   // {kidId, kidName}
+  const[comboModal,setComboModal]=useState(null);  // combo object or {} for new
+  const[settleModal,setSettleModal]=useState(null);// bill object
 
   const{list:toasts,add:toast}=useToasts();
 
@@ -545,9 +561,10 @@ export default function WattsHub(){
       FB.listen("wh/comps",          v=>{setComps(v||{});saveCache("comps",v||{});}),
       FB.listen("wh/parentLog",      v=>setParentLog(v||{})),
       FB.listen("wh/store",          v=>{if(v){const a=Object.values(v).filter(Boolean);setStoreItems(a);saveCache("store",a);}}),
-      FB.listen("wh/txlog",          v=>{if(v){const a=Object.values(v).filter(Boolean).sort((a2,b)=>b.ts-a2.ts);setTxLog(a);saveCache("txlog",a.slice(0,400));}}),
+      FB.listenLast("wh/txlog","ts",500,v=>{if(v){const a=Object.values(v).filter(Boolean).sort((a2,b)=>b.ts-a2.ts);setTxLog(a);saveCache("txlog",a.slice(0,400));}}),
       FB.listen("wh/bills",          v=>{if(v){const a=Object.values(v).filter(Boolean);setBills(a);saveCache("bills",a);}}),
       FB.listen("wh/billPayments",   v=>{setBillPay(v||{});saveCache("billPay",v||{});}),
+      FB.listen("wh/combos",         v=>{const a=v?Object.values(v).filter(Boolean):[];setCombos(a);saveCache("combos",a);}),
       FB.listen("wh/allowedUids",    v=>setAllowedUids(v||{})),
       FB.listen("wh/summerProgram/kids",v=>setSumKids(v||{})),
       FB.listen("wh/summerSessions", v=>setSumSessions(v||{})),
@@ -595,12 +612,12 @@ export default function WattsHub(){
   const isAdmin=uid&&allowedUids[uid]?.role==="admin";
 
   /* Claimed pool chore for an actor */
-  const myClaimedPool=(actorId)=>pool.find(p=>p.claimedBy===actorId);
+  const myClaimedPool=(actorId)=>pool.filter(p=>p.claimedBy===actorId);
 
   /* Earning-related tx types. weekEarned is NET (includes undos/corrections) so
      it matches what actually reached the balance — a gross sum overstates after
      a chore is unchecked or a completion is corrected. */
-  const EARN_TYPES=new Set(["chore","pool","summer_bonus","bonus","chore_undo","correction"]);
+  const EARN_TYPES=new Set(["chore","pool","summer_bonus","bonus","chore_undo","correction","flash_bonus","combo_bonus"]);
   const weekEarned=(kidId,weekKey)=>
     txLog.filter(tx=>(tx.actorId===kidId||tx.kidId===kidId)&&EARN_TYPES.has(tx.type)&&wk(new Date(tx.ts).toLocaleDateString("en-CA"))===weekKey).reduce((a,tx)=>a+(tx.cents||0),0);
 
@@ -727,7 +744,21 @@ export default function WattsHub(){
     toast("Chore rejected","warn");
   }
 
-  async function editComp(dk,choreId,actorId,{newCents,remove,note}){
+  async function editComp(dk,choreId,actorId,{newCents,remove,note,fromTx}){
+    if(fromTx){
+      /* Correction on a raw transaction: adjust balance + log only. */
+      const kid=kidById(actorId);if(!kid){toast("Kid not found","error");return;}
+      const orig=fromTx.cents||0;
+      const diff=remove?-orig:(newCents-orig);
+      if(diff!==0){
+        await FB.atomic({
+          [`wh/kids/${actorId}/balanceCents`]:inc(diff),
+          [`wh/txlog/${tkid(actorId)}`]:{actorId,type:"correction",cents:diff,desc:`${remove?"Reversed":"Adjusted"}: ${fromTx.desc||"transaction"}${note?` — ${note}`:""}`,ts:Date.now()},
+        });
+      }
+      toast(remove?"Transaction reversed":"Transaction adjusted","success");
+      setEditCompModal(null);return;
+    }
     const comp=getComp(dk,choreId,actorId);
     const kid=kidById(actorId);
     if(!comp||!kid)return;
@@ -754,7 +785,7 @@ export default function WattsHub(){
   }
 
   async function claimPool(choreId,actorId){
-    if(myClaimedPool(actorId)){toast("Finish your current chore first!","warn");return;}
+    if(myClaimedPool(actorId).length>=5){toast("Max 5 claimed chores — finish one first!","warn");return;}
     const chore=pool.find(p=>p.id===choreId);
     if(chore&&!isPoolDue(chore)){toast(`Not due yet — ${dueLabel(chore)}.`,"warn");return;}
     await FB.atomic({[`wh/pool/${choreId}/claimedBy`]:actorId,[`wh/pool/${choreId}/claimedAt`]:Date.now()});
@@ -782,12 +813,45 @@ export default function WattsHub(){
       upd[`wh/pool/${choreId}/completedBy`]=null;
       upd[`wh/pool/${choreId}/completedAt`]=null;
     }
+    /* ⚡ Flash bonus — extra payout if done before the deadline (consumed on completion either way). */
+    let flashCents=0;
+    if(chore.flashBonusCents&&chore.flashExpiresAt){
+      if(now<chore.flashExpiresAt&&!isParentActor&&kid)flashCents=chore.flashBonusCents;
+      upd[`wh/pool/${choreId}/flashBonusCents`]=null;
+      upd[`wh/pool/${choreId}/flashExpiresAt`]=null;
+    }
+    /* 🧩 Combo bonus — every chore in the combo done today by the same person. */
+    const dkNow=ld();
+    const comboWins=[];
     if(!isParentActor&&kid){
-      upd[`wh/kids/${actorId}/balanceCents`]=inc(cents);
+      for(const cb of combos){
+        if(!cb||cb.active===false)continue;
+        const ids=cb.chorePoolIds||[];
+        if(ids.length<2||!ids.includes(choreId))continue;
+        if(cb.lastPaid?.date===dkNow)continue; /* already paid out today */
+        const othersDone=ids.filter(x=>x!==choreId).every(oid=>{
+          const oc=pool.find(p2=>p2.id===oid);
+          return oc&&oc.completedBy===actorId&&oc.completedAt&&new Date(oc.completedAt).toLocaleDateString("en-CA")===dkNow;
+        });
+        if(othersDone){comboWins.push(cb);upd[`wh/combos/${cb.id}/lastPaid`]={date:dkNow,actorId,ts:now};}
+      }
+    }
+    const comboCents=comboWins.reduce((a,cb)=>a+(cb.bonusCents||0),0);
+    if(!isParentActor&&kid){
+      upd[`wh/kids/${actorId}/balanceCents`]=inc(cents+flashCents+comboCents);
       upd[`wh/txlog/${tkid(actorId)}`]={actorId,type:"pool",cents,desc:`Pool: ${chore.title}`,ts:now};
+      if(flashCents)upd[`wh/txlog/${tkid(actorId)}`]={actorId,type:"flash_bonus",cents:flashCents,desc:`⚡ Flash bonus: ${chore.title}`,ts:now+1};
+      comboWins.forEach((cb,i)=>{upd[`wh/txlog/${tkid(actorId)}`]={actorId,type:"combo_bonus",cents:cb.bonusCents||0,desc:`🧩 Combo: ${cb.title}`,ts:now+2+i};});
     }
     await FB.atomic(upd);
-    toast(isParentActor?`✓ Pool chore done: ${chore.title}`:`+${c$(cents)} — pool chore complete!`,"success");
+    const extra=flashCents+comboCents;
+    toast(isParentActor?`✓ Pool chore done: ${chore.title}`
+      :`+${c$(cents+extra)} — pool chore complete!${flashCents?" ⚡ flash bonus!":""}${comboWins.length?` 🧩 combo: ${comboWins.map(cb=>cb.title).join(", ")}!`:""}`,"success");
+  }
+
+  async function unclaimPool(choreId){
+    await FB.atomic({[`wh/pool/${choreId}/claimedBy`]:null,[`wh/pool/${choreId}/claimedAt`]:null});
+    toast("Released back to the pool","info");
   }
 
   async function uncompletePool(choreId){
@@ -851,6 +915,16 @@ export default function WattsHub(){
     toast(`Added ${n} cleaning chores ✓`,"success");
   }
 
+  async function saveCombo(data){
+    const id=data.id||`cb${Date.now()}`;
+    await FB.write(`wh/combos/${id}`,{...data,id});
+    toast("Combo saved ✓","success");
+  }
+  async function removeCombo(id){
+    await FB.del(`wh/combos/${id}`);
+    toast("Combo removed","warn");
+  }
+
   async function updatePoolChore(id,patch){
     const upd={};
     Object.entries(patch).forEach(([k,v])=>{upd[`wh/pool/${id}/${k}`]=v;});
@@ -870,6 +944,35 @@ export default function WattsHub(){
       [`wh/txlog/${tkid(kidId)}`]:{actorId:kidId,type:"bill",cents:-amountCents,desc:`Bill payment`,ts:Date.now()},
     });
     toast(`Payment of ${c$(amountCents)} recorded ✓`,"success");
+  }
+
+  /* Month-end settle: pay what the kid has toward the bill; family covers the rest.
+     Optionally roll the shortfall into next month's goal (carryoverCents). */
+  async function settleBill(bill,{carry=false}={}){
+    const kid=kidById(bill.kidId);if(!kid)return;
+    const monthKey2=mk(ld());
+    const paidSoFar=Object.values(billPay[bill.kidId]||{}).filter(p=>p.billId===bill.id&&p.monthKey===monthKey2).reduce((a,p)=>a+(p.amountCents||0),0);
+    const totalDue=(bill.amountCents||0)+(bill.carryoverCents||0);
+    const remaining=Math.max(0,totalDue-paidSoFar);
+    const bal=kid.balanceCents||0;
+    const pay=Math.min(bal,remaining);
+    const shortfall=remaining-pay;
+    const id=`bp_${Date.now()}_${uid6()}`;
+    const upd={
+      [`wh/billPayments/${bill.kidId}/${id}`]:{billId:bill.id,amountCents:pay,monthKey:monthKey2,date:ld(),ts:Date.now(),settle:true,shortfallCents:shortfall},
+      [`wh/bills/${bill.id}/lastSettled`]:{monthKey:monthKey2,paidCents:pay,shortfallCents:shortfall,ts:Date.now()},
+      [`wh/bills/${bill.id}/carryoverCents`]:carry&&shortfall>0?shortfall:null,
+    };
+    if(pay>0){
+      upd[`wh/kids/${bill.kidId}/balanceCents`]=inc(-pay);
+      upd[`wh/txlog/${tkid(bill.kidId)}`]={actorId:bill.kidId,type:"bill",cents:-pay,desc:`Bill settled: ${bill.name}`,ts:Date.now()};
+    }
+    if(shortfall>0){
+      upd[`wh/txlog/${tkid(bill.kidId)}`]={actorId:bill.kidId,type:"bill_shortfall",cents:0,desc:`${bill.name}: family covered ${c$(shortfall)}${carry?" → added to next month":""}`,ts:Date.now()+1};
+    }
+    await FB.atomic(upd);
+    toast(shortfall>0?`Settled ${bill.name} — paid ${c$(pay)}, family covered ${c$(shortfall)}`:`Settled ${bill.name} — paid ${c$(pay)} in full ✓`,"success");
+    setSettleModal(null);
   }
 
   async function triggerSummerBonus(kidId){
@@ -954,1218 +1057,1397 @@ export default function WattsHub(){
 
   /* ════════ VIEWS ════════════════════════════════════════════ */
 
-  function ChoresView({actorId,isParent=false,isParentActor=false}){
-    const filtered=chores.filter(c=>{
-      const override=getOverride(c,selDate);
-      const assigned=override?.assignedTo||(c.assignedTo||[]);
-      if(actorId&&!assigned.includes(actorId))return false;
-      return isScheduled(c,selDate);
-    });
-    const dateLabel=isToday?"Today":lp(selDate).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"});
-    return(
-      <div>
-        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
-          <button className="btn bg bsm" onClick={()=>{const d=lp(selDate);d.setDate(d.getDate()-1);setSelDate(d.toLocaleDateString("en-CA"));}}>‹</button>
-          <span style={{flex:1,textAlign:"center",fontSize:14,fontWeight:700}}>{dateLabel}</span>
-          <button className="btn bg bsm" disabled={isToday} onClick={()=>{const d=lp(selDate);d.setDate(d.getDate()+1);const s=d.toLocaleDateString("en-CA");if(s<=ld())setSelDate(s);}}>›</button>
-        </div>
-        {isParent&&pendCount>0&&(
-          <div className="card" style={{marginBottom:12,borderColor:"#FCD34D"}}>
-            <div className="ch">⏳ Pending approval</div>
-            {chores.filter(c=>c.requiresApproval).flatMap(c=>kids.map(k=>{
-              const comp=getComp(ld(),c.id,k.id);
-              if(comp?.status!=="pending")return null;
-              return(<div key={k.id+c.id} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:"1px solid var(--bdr)"}}>
-                <span style={{flex:1,fontSize:13}}><strong>{k.name}</strong> — {c.title}</span>
-                <button className="btn bte bxs" onClick={()=>approveComp(ld(),c.id,k.id)}>✓</button>
-                <button className="btn bco bxs" onClick={()=>rejectComp(ld(),c.id,k.id)}>✗</button>
-              </div>);
-            }).filter(Boolean))}
-          </div>
-        )}
-        {filtered.length===0?(<div className="empty"><div style={{fontSize:28,marginBottom:6}}>🎉</div><div style={{fontWeight:700}}>Nothing scheduled</div></div>):(
-          filtered.map(c=>{
-            const override=getOverride(c,selDate);
-            const assigned=override?.assignedTo||(c.assignedTo||[]);
-            const actors=actorId?[actorId]:assigned;
-            return actors.map(aId=>{
-              const actor=kidById(aId)||parById(aId);
-              if(!actor)return null;
-              const key=`${c.id}_${aId}`;
-              const comp=getComp(selDate,c.id,aId); /* reads from viewed date */
-              const isOpt=optim[key];
-              const status=comp?.status||"none";
-              const isDone=status==="done"||status==="approved";
-              const pal=PAL[(actor.colorIdx||0)%PAL.length];
-              /* Everything is tappable: none→complete, pending→cancel,
-                 done/approved→uncheck (completeChore reverses the money). */
-              const canTap=true;
-              return(
-                <div key={key} className={`ccard${isDone?" done":status==="pending"?" pend":isOpt?" opt":""}`}
-                  onClick={()=>canTap&&completeChore(c.id,aId,isParentActor||!!parById(aId),selDate)}>
-                  <div className={`cchk${isDone?" done":status==="pending"?" pend":isOpt?" opt":""}`}>
-                    {isDone&&<span style={{color:"#fff",fontWeight:900,fontSize:12}}>✓</span>}
-                    {status==="pending"&&<span style={{fontSize:10}}>⏳</span>}
-                    {isOpt&&!isDone&&<span style={{color:"var(--pr)",fontSize:10}}>…</span>}
-                  </div>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div className="ctitle" style={{textDecoration:isDone?"line-through":""}}>{c.title}</div>
-                    {!actorId&&<div style={{fontSize:11,color:pal.a,marginTop:1}}>{actor.name}</div>}
-                  </div>
-                  <span className={`cdiff d${c.diff?.[0]||"e"}`}>{c.diff||"easy"}</span>
-                  {!parById(aId)&&<span className="cprice">{c$(c.priceCents||25)}</span>}
-                  <div style={{display:"flex",gap:4,flexShrink:0}} onClick={e=>e.stopPropagation()}>
-                    {isParent&&(
-                      <button className="btn bg bxs" onClick={()=>setChoreModal({mode:"edit",data:{...c}})}>✏️</button>
-                    )}
-                    {isParent&&isDone&&(
-                      <button className="btn bam bxs" onClick={()=>setEditCompModal({dk:selDate,choreId:c.id,actorId:aId,comp})}>📝</button>
-                    )}
-                  </div>
-                </div>
-              );
-            });
-          })
-        )}
-      </div>
-    );
-  }
 
-  function PoolView({actorId,isParentActor=false,showManage=false}){
-    const myClaimed=myClaimedPool(actorId);
-    const available=pool.filter(p=>!p.claimedBy&&isPoolDue(p));
-    const resting=pool.filter(p=>!p.claimedBy&&p.recurring&&!isPoolDue(p));
-    const done=pool.filter(p=>!p.recurring&&p.completedBy&&p.completedAt&&new Date(p.completedAt).toLocaleDateString("en-CA")===ld()&&(showManage||p.completedBy===actorId));
-    const FreqPill=({c})=>c&&c.freq?<span className="cdiff" style={{background:"#EEF2FF",color:"#4338CA"}}>{FREQ_LBL[c.freq]||c.freq}</span>:<span className={`cdiff d${c.diff?.[0]||"e"}`}>{c.diff||"easy"}</span>;
-    return(
-      <div>
-        {myClaimed&&(
-          <div className="card" style={{marginBottom:12,borderColor:"#A5F3FC",background:"var(--bll)"}}>
-            <div className="ch" style={{color:"var(--bl)"}}>🔵 Your claimed chore</div>
-            <div className="ccard" style={{background:"#fff",marginBottom:0}}
-              onClick={()=>completePool(myClaimed.id,actorId,isParentActor)}>
-              <div className="cchk"><span style={{fontSize:10}}>⚡</span></div>
-              <div style={{flex:1}}>
-                <div className="ctitle">{myClaimed.title}</div>
-                <div style={{fontSize:11,color:"var(--tx2)"}}>Tap when done</div>
-              </div>
-              <span className="cprice">{!isParentActor?c$(myClaimed.priceCents||25):"log only"}</span>
-            </div>
-          </div>
-        )}
-        <div className="card" style={{marginBottom:12}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-            <div className="ch" style={{marginBottom:0}}>🎯 Available to grab</div>
-            {showManage&&<div style={{display:"flex",gap:6}}>
-              <button className="btn bg bsm" onClick={()=>seedCleaningPool()}>🧹 Add cleaning set</button>
-              <button className="btn bbl bsm" onClick={()=>setPoolAddModal(true)}>+ Add</button>
-            </div>}
-          </div>
-          {available.length===0?<div style={{color:"var(--tx3)",fontSize:13}}>No pool chores due right now.</div>:(
-            available.map(p=>(
-              <div key={p.id} className="ccard">
-                <div className="cchk"/>
-                <div style={{flex:1}}>
-                  <div className="ctitle">{p.title}</div>
-                  {(p.area||p.note)&&<div style={{fontSize:11,color:"var(--tx2)"}}>{p.area?p.area:""}{p.area&&p.note?" · ":""}{p.note||""}</div>}
-                </div>
-                <FreqPill c={p}/>
-                <span className="cprice">{c$(p.priceCents||25)}</span>
-                <div onClick={e=>e.stopPropagation()} style={{display:"flex",gap:4}}>
-                  {actorId&&!myClaimed&&<button className="btn bbl bsm" onClick={()=>claimPool(p.id,actorId)}>Claim</button>}
-                  {showManage&&<button className="btn bg bxs" onClick={()=>setPoolEditModal(p)}>✏️</button>}
-                  {showManage&&<button className="btn bco bxs" onClick={()=>removePoolChore(p.id)}>🗑</button>}
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-        {resting.length>0&&(
-          <div className="card" style={{marginBottom:12}}>
-            <div className="ch">😴 Scheduled (resting)</div>
-            {resting.map(p=>{
-              const by=(kidById(p.completedBy)||parById(p.completedBy))?.name;
-              const canUndo=(showManage||p.completedBy===actorId)&&p.completedBy;
-              return(
-              <div key={p.id} className="ccard">
-                <div className="cchk"/>
-                <div style={{flex:1}}>
-                  <div className="ctitle">{p.title}</div>
-                  <div style={{fontSize:11,color:"var(--tx2)"}}>{p.area?p.area+" · ":""}{by?`done by ${by} · `:""}{dueLabel(p)}</div>
-                </div>
-                <FreqPill c={p}/>
-                <span className="cprice">{c$(p.priceCents||25)}</span>
-                <div onClick={e=>e.stopPropagation()} style={{display:"flex",gap:4}}>
-                  {canUndo&&<button className="btn bg bxs" onClick={()=>uncompletePool(p.id)}>↩︎ Undo</button>}
-                  {showManage&&<button className="btn bg bxs" onClick={()=>setPoolEditModal(p)}>✏️</button>}
-                  {showManage&&<button className="btn bco bxs" onClick={()=>removePoolChore(p.id)}>🗑</button>}
-                </div>
-              </div>
-            );})}
-          </div>
-        )}
-        {done.length>0&&(
-          <div className="card">
-            <div className="ch">✅ Completed today</div>
-            {done.map(p=>{
-              const by=(kidById(p.completedBy)||parById(p.completedBy))?.name;
-              const canUndo=showManage||p.completedBy===actorId;
-              return(<div key={p.id} className="ccard done">
-              <div className="cchk done"><span style={{color:"#fff",fontWeight:900,fontSize:12}}>✓</span></div>
-              <div style={{flex:1}}><div className="ctitle">{p.title}</div>{by&&<div style={{fontSize:11,color:"var(--tx2)"}}>by {by}</div>}</div>
-              <span className="cprice">{c$(p.priceCents||25)}</span>
-              {canUndo&&<button className="btn bg bxs" onClick={()=>uncompletePool(p.id)}>↩︎ Undo</button>}
-            </div>);})}
-          </div>
-        )}
-      </div>
-    );
-  }
 
-  function DashboardView(){
-    const curWk=wk(ld());
-    return(
-      <div>
-        {pendCount>0&&parentMode&&(
-          <div style={{background:"var(--aml)",border:"1px solid #FCD34D",borderRadius:10,padding:"10px 14px",marginBottom:14,display:"flex",alignItems:"center",justifyContent:"space-between",fontSize:13}}>
-            <span style={{fontWeight:700,color:"var(--am)"}}>⏳ {pendCount} chore{pendCount!==1?"s":""} awaiting approval</span>
-            <button className="btn bg bsm" onClick={()=>setView("chores")}>Review →</button>
-          </div>
-        )}
-        <div className="dgrid">
-          {kids.map(k=>{
-            const pal=PAL[k.colorIdx%PAL.length];
-            const bal=k.balanceCents||0;
-            const goal=k.goal?.weeklyTargetCents||300;
-            const earned=weekEarned(k.id,curWk);
-            const gpct=Math.min(100,Math.round((earned/goal)*100));
-            const sk=sumKids[k.id];
-            const kidBills=bills.filter(b=>b.kidId===k.id&&b.active);
-            const totalBills=kidBills.reduce((a,b)=>a+(b.amountCents||0),0);
-            /* Monthly bill tracker: fills as the kid's balance covers this month's
-               bill; once the bill is actually paid (billPay this month) it flips to
-               a savings bar. Resets to tracking at the start of each month. */
-            const paidThisMonth=billProgress(k.id);
-            const billPaid=totalBills>0&&paidThisMonth>=totalBills;
-            const savingMode=totalBills===0||billPaid;
-            const billPct=totalBills>0?Math.min(100,Math.round((bal/totalBills)*100)):0;
-            const billReady=totalBills>0&&bal>=totalBills;
-            const moName=new Date().toLocaleDateString("en-US",{month:"short"});
-            /* Month-end projection: net earned so far + all remaining assigned chores */
-            const mEarned=monthEarned(k.id,mk(ld()));
-            const mRemaining=remainingAssignedCents(k.id);
-            const mProjected=mEarned+mRemaining;
-            const mPct=mProjected>0?Math.min(100,Math.round((Math.max(0,mEarned)/mProjected)*100)):0;
-            return(
-              <div key={k.id} className="kcard" style={{background:"var(--sur)",border:"1px solid var(--bdr)",borderRadius:14,padding:16,cursor:"pointer",transition:"box-shadow .15s"}}
-                onMouseEnter={e=>e.currentTarget.style.boxShadow="0 4px 12px rgba(0,0,0,.08)"}
-                onMouseLeave={e=>e.currentTarget.style.boxShadow=""}
-                onClick={()=>enterKid(k.id)}
-                onContextMenu={e=>{e.preventDefault();if(parentMode)setBonusModal({kidId:k.id,kidName:k.name});}}>
-                <div style={{display:"flex",alignItems:"center",gap:11,marginBottom:11}}>
-                  <Av initials={k.initials} colorIdx={k.colorIdx} size={42}/>
-                  <div style={{flex:1}}>
-                    <div style={{fontSize:15,fontWeight:800}}>{k.name}</div>
-                    <div style={{fontSize:11,color:"var(--tx2)"}}>Age {k.age}</div>
-                  </div>
-                  <div style={{textAlign:"right"}}>
-                    <div style={{fontSize:17,fontWeight:900,color:"var(--gr)"}}>{c$(bal)}</div>
-                    <div style={{fontSize:10,color:"var(--tx3)"}}>balance</div>
-                  </div>
-                </div>
-                <div style={{marginBottom:8}}>
-                  <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"var(--tx2)",marginBottom:3}}>
-                    <span>Weekly {c$(earned)} / {c$(goal)}</span>
-                    <span style={{color:gpct>=100?"var(--gr)":"var(--tx2)",fontWeight:gpct>=100?800:400}}>{gpct}%{gpct>=100?" 🎯":""}</span>
-                  </div>
-                  <div className="pbar"><div className="pbar-f" style={{width:`${gpct}%`,background:gpct>=100?"var(--gr)":pal.a}}/></div>
-                </div>
-                {parentMode&&(
-                  <div style={{marginBottom:8}}>
-                    <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"var(--tx2)",marginBottom:3}}>
-                      <span>📈 {moName} {c$(mEarned)} → <strong style={{color:"var(--pr)"}}>{c$(mProjected)}</strong> projected</span>
-                      <span title={`${c$(mRemaining)} of assigned chores left this month`}>{c$(mRemaining)} left</span>
-                    </div>
-                    <div className="pbar"><div className="pbar-f" style={{width:`${mPct}%`,background:"var(--pr)"}}/></div>
-                  </div>
-                )}
-                <div style={{marginBottom:8}}>
-                  <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"var(--tx2)",marginBottom:3}}>
-                    {savingMode
-                      ? <><span>{billPaid?`✓ ${moName} bill paid · Saving`:"Saving"} {c$(bal)}</span><span style={{color:"var(--gr)",fontWeight:700}}>🐷</span></>
-                      : <><span>{moName} bill {c$(bal)} / {c$(totalBills)}</span><span style={{color:billReady?"var(--gr)":"var(--am)",fontWeight:700}}>{billReady?"ready ✓":`${billPct}%`}</span></>}
-                  </div>
-                  <div className="pbar"><div className="pbar-f" style={{width:savingMode?"100%":`${billPct}%`,background:savingMode||billReady?"var(--gr)":"var(--am)"}}/></div>
-                </div>
-                <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
-                  {sk&&(sk.totalSessionsCompleted||0)>0&&<span className="chip">☀️ {sk.totalSessionsCompleted} sessions</span>}
-                  {parentMode&&<button className="btn bte bxs" style={{marginLeft:"auto"}} onClick={e=>{e.stopPropagation();setBonusModal({kidId:k.id,kidName:k.name});}}>🌟</button>}
-                  {parentMode&&<button className="btn bbl bxs" onClick={e=>{e.stopPropagation();setNoteModal({kidId:k.id,kidName:k.name});}}>📝</button>}
-                </div>
-                {k.latestNote&&<div style={{fontSize:11,color:"var(--pr)",fontStyle:"italic",marginTop:6,padding:"5px 8px",background:"var(--prl)",borderRadius:6}}>📝 {k.latestNote}</div>}
-              </div>
-            );
-          })}
-        </div>
-        {/* Parent contributions */}
-        <div style={{marginTop:14}}>
-          <div className="card">
-            <div className="ch" style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <span>👨‍👩‍👧‍👦 Parent contributions this week</span>
-              {parentMode&&<span style={{color:"var(--gr)",fontWeight:800}}>{c$(parents.reduce((a,p)=>a+parentContrib(p.id,curWk,true).cents,0))} saved</span>}
-            </div>
-            <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
-              {parents.map(p=>{
-                const {cents,tasks}=parentContrib(p.id,curWk,true);
-                return(
-                  <div key={p.id} style={{display:"flex",alignItems:"center",gap:8,flex:1,minWidth:160}}>
-                    <Av initials={p.initials} colorIdx={p.colorIdx} size={32}/>
-                    <div>
-                      <div style={{fontSize:13,fontWeight:700}}>{p.name}</div>
-                      <div style={{fontSize:12,color:"var(--tx2)"}}>{tasks} task{tasks!==1?"s":""} this week{parentMode&&cents>0?` · ${c$(cents)} saved`:""}</div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
-  function SummaryView(){
-    const[period,setPeriod]=useState("week");
-    const[selWk,setSelWk]=useState(wk(ld()));
-    const[selMk,setSelMk]=useState(mk(ld()));
-    const allWks=Array.from(new Set(txLog.map(tx=>wk(new Date(tx.ts).toLocaleDateString("en-CA"))))).sort().reverse();
-    const allMks=Array.from(new Set(txLog.map(tx=>mk(new Date(tx.ts).toLocaleDateString("en-CA"))))).sort().reverse();
-    const filterTx=tx=>{
-      const txDate=new Date(tx.ts).toLocaleDateString("en-CA");
-      return period==="week"?wk(txDate)===selWk:mk(txDate)===selMk;
-    };
-    const periodTx=txLog.filter(filterTx);
-    return(
-      <div>
-        <div style={{display:"flex",gap:6,marginBottom:14,alignItems:"center",flexWrap:"wrap"}} className="no-print">
-          <button className={`btn bsm ${period==="week"?"bp":"bg"}`} onClick={()=>setPeriod("week")}>Week</button>
-          <button className={`btn bsm ${period==="month"?"bp":"bg"}`} onClick={()=>setPeriod("month")}>Month</button>
-          {period==="week"&&<select className="fi" style={{width:"auto",padding:"5px 10px",fontSize:12}} value={selWk} onChange={e=>setSelWk(e.target.value)}>
-            {allWks.length?allWks.map(w=><option key={w} value={w}>{w}</option>):<option value={selWk}>{selWk}</option>}
-          </select>}
-          {period==="month"&&<select className="fi" style={{width:"auto",padding:"5px 10px",fontSize:12}} value={selMk} onChange={e=>setSelMk(e.target.value)}>
-            {allMks.length?allMks.map(m=><option key={m} value={m}>{m}</option>):<option value={selMk}>{selMk}</option>}
-          </select>}
-          <button className="btn bg bsm" onClick={()=>window.print()}>🖨️</button>
-        </div>
-        <div className="dgrid" style={{marginBottom:14}}>
-          {kids.map(k=>{
-            const kTx=periodTx.filter(tx=>tx.actorId===k.id&&EARN_TYPES.has(tx.type));
-            const gross=kTx.filter(tx=>tx.cents>0).reduce((a,tx)=>a+(tx.cents||0),0);
-            const adj=kTx.filter(tx=>tx.cents<0).reduce((a,tx)=>a+(tx.cents||0),0);
-            const total=gross+adj;
-            const pal=PAL[k.colorIdx%PAL.length];
-            return(
-              <div key={k.id} style={{background:"var(--sur)",border:"1px solid var(--bdr)",borderRadius:12,overflow:"hidden"}}>
-                <div style={{padding:"10px 14px",background:pal.l,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <div style={{display:"flex",alignItems:"center",gap:8}}>
-                    <Av initials={k.initials} colorIdx={k.colorIdx} size={28}/>
-                    <strong style={{color:pal.t}}>{k.name}</strong>
-                  </div>
-                  <span style={{fontSize:16,fontWeight:900,color:pal.a}}>{c$(total)}</span>
-                </div>
-                <div style={{padding:"8px 14px"}}>
-                  {adj<0&&<div style={{fontSize:11,color:"var(--tx2)",marginBottom:6}}>Earned {c$(gross)} · adjustments {c$(adj)} · <strong>net {c$(total)}</strong></div>}
-                  {kTx.length===0?<div style={{fontSize:12,color:"var(--tx3)"}}>No earnings this period.</div>:(
-                    kTx.slice(0,8).map((tx,i)=>(
-                      <div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:12,padding:"4px 0",borderBottom:"1px solid var(--bdr)"}}>
-                        <span style={{color:"var(--tx2)"}}>{new Date(tx.ts).toLocaleDateString("en-US",{month:"short",day:"numeric"})}</span>
-                        <span style={{flex:1,marginLeft:8,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{tx.desc}</span>
-                        <span style={{color:tx.cents<0?"#DC2626":"var(--gr)",fontWeight:700,marginLeft:8}}>{c$(tx.cents)}</span>
-                        {parentMode&&<button className="btn bam bxs" style={{marginLeft:6}} onClick={()=>{const dk=new Date(tx.ts).toLocaleDateString("en-CA");setEditCompModal({dk,choreId:tx.desc,actorId:tx.actorId,comp:{cents:tx.cents},fromTx:tx});}}>✏️</button>}
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-        {/* Parent log summary */}
-        <div className="card">
-          <div className="ch">Parent tasks</div>
-          {parents.map(p=>{
-            const {cents:pSaved,tasks:pCount}=parentContrib(p.id,period==="week"?selWk:selMk,period==="week");
-            const pTasks=Object.entries(parentLog).filter(([d])=>period==="week"?wk(d)===selWk:mk(d)===selMk).flatMap(([,logs])=>Object.values(logs||{}).filter(l=>l.parentId===p.id));
-            return(<div key={p.id} style={{marginBottom:10}}>
-              <div style={{fontSize:13,fontWeight:700,marginBottom:4}}>{p.name} — {pCount} task{pCount!==1?"s":""}{parentMode?` · ${c$(pSaved)} saved`:""}</div>
-              {pTasks.slice(0,5).map((t,i)=>(
-                <div key={i} style={{display:"flex",gap:8,fontSize:12,color:"var(--tx2)",padding:"3px 0"}}>
-                  <span>{new Date(t.ts).toLocaleDateString("en-US",{month:"short",day:"numeric"})}</span>
-                  <span>{t.desc}</span>
-                </div>
-              ))}
-            </div>);
-          })}
-        </div>
-      </div>
-    );
-  }
 
-  function BillsView({kidId=null}){
-    const filteredBills=bills.filter(b=>kidId?b.kidId===kidId:true);
-    return(
-      <div>
-        {parentMode&&!kidId&&<div style={{marginBottom:12}}><button className="btn bp bsm" onClick={()=>setBillModal({})}>+ Add Bill</button></div>}
-        <div className="rgrid">
-          {filteredBills.map(bill=>{
-            const kid=kidById(bill.kidId);
-            if(!kid)return null;
-            const bal=kid.balanceCents||0;
-            const needed=bill.amountCents;
-            /* Progress = current balance toward the bill amount */
-            const savPct=Math.min(100,Math.round((bal/needed)*100));
-            /* Days until July 1 */
-            const dueDate=new Date("2026-07-01T00:00:00");
-            const today2=new Date();
-            const daysLeft=Math.max(0,Math.ceil((dueDate-today2)/(1000*60*60*24)));
-            /* Earning pace: avg daily from this week × days left */
-            const curWkEarned=weekEarned(bill.kidId,wk(ld()));
-            const dailyRate=curWkEarned/7;
-            const projectedTotal=bal+(dailyRate*daysLeft);
-            const onPace=projectedTotal>=needed;
-            const pal=PAL[kid.colorIdx%PAL.length];
-            const monthK=mk(ld());
-            const paid=Object.values(billPay[bill.kidId]||{}).filter(p=>p.billId===bill.id&&p.monthKey===monthK).reduce((a,p)=>a+(p.amountCents||0),0);
-            return(
-              <div key={bill.id} style={{background:"var(--sur)",border:"1px solid var(--bdr)",borderLeft:`4px solid ${pal.a}`,borderRadius:12,overflow:"hidden"}}>
-                <div style={{padding:"11px 14px",borderBottom:"1px solid var(--bdr)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <div>
-                    <div style={{fontSize:14,fontWeight:800}}>{bill.name}</div>
-                    <div style={{fontSize:11,color:"var(--tx2)"}}>{!kidId&&kid.name+" · "}{daysLeft} days until July 1</div>
-                  </div>
-                  <div style={{textAlign:"right"}}>
-                    <div style={{fontSize:15,fontWeight:900,color:"var(--re)"}}>{c$(needed)} due</div>
-                    <span className={`pill ${onPace?"pill-gr":"pill-am"}`}>{onPace?"On pace":"Behind"}</span>
-                  </div>
-                </div>
-                <div style={{padding:"10px 14px"}}>
-                  {/* Balance saved toward bill */}
-                  <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"var(--tx2)",marginBottom:4}}>
-                    <span>Balance saved</span>
-                    <span style={{fontWeight:800,color:savPct>=100?"var(--gr)":"var(--tx)"}}>{c$(bal)} / {c$(needed)} ({savPct}%)</span>
-                  </div>
-                  <div className="pbar" style={{marginBottom:8}}>
-                    <div className="pbar-f" style={{width:`${savPct}%`,background:savPct>=100?"var(--gr)":pal.a}}/>
-                  </div>
-                  {/* Projected total by due date */}
-                  <div style={{fontSize:11,color:"var(--tx3)",marginBottom:8}}>
-                    At current pace → projected {c$(Math.round(projectedTotal))} by July 1
-                    {!onPace&&<span style={{color:"var(--re)",fontWeight:700}}> (short {c$(Math.max(0,needed-Math.round(projectedTotal)))})</span>}
-                  </div>
-                  {/* Manual payments made this month */}
-                  {paid>0&&<div style={{fontSize:11,color:"var(--tx2)",marginBottom:8}}>Applied this month: <strong style={{color:"var(--gr)"}}>{c$(paid)}</strong></div>}
-                  <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
-                    <button className="btn bte bsm" onClick={()=>setPayBillModal({bill,kidId:bill.kidId})}>Pay bill</button>
-                    {parentMode&&<button className="btn bg bsm" onClick={()=>setBillModal(bill)}>Edit</button>}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-        {filteredBills.length===0&&<div className="empty"><div style={{fontSize:28,marginBottom:6}}>💸</div><div>No bills set up yet.</div></div>}
-      </div>
-    );
-  }
 
-  function StoreView({kidId=null}){
-    const kid=kidId?kidById(kidId):activeKid?kidById(activeKid):null;
-    const bal=kid?.balanceCents||0;
-    const items=[...STORE_DEF,...storeItems];
-    return(
-      <div>
-        {kid&&<div style={{fontSize:14,fontWeight:800,color:"var(--am)",marginBottom:12}}>💰 {kid.name}: {c$(bal)}</div>}
-        {!kid&&<div className="card" style={{marginBottom:12,fontSize:13,color:"var(--tx2)"}}>👆 Select a kid to make purchases.</div>}
-        <div className="sgrid">
-          {items.map(item=>{
-            const can=kid&&bal>=item.priceCents;
-            const cant=kid&&bal<item.priceCents;
-            return(<div key={item.id} className={`sitem${can?" afford":cant?" no-afford":""}`}
-              style={{background:"var(--sur)",border:"1px solid var(--bdr)",borderRadius:10,padding:14,textAlign:"center",cursor:can?"pointer":"default",transition:"all .15s"}}
-              onClick={async()=>{
-                if(!can)return;
-                const id=tkid(kidId||activeKid);
-                await FB.atomic({[`wh/kids/${kid.id}/balanceCents`]:inc(-item.priceCents),[`wh/txlog/${id}`]:{actorId:kid.id,type:"purchase",cents:-item.priceCents,desc:item.name,ts:Date.now()}});
-                toast(`Purchased: ${item.name}! 🎉`,"success");
-              }}>
-              <div style={{fontSize:28,marginBottom:6}}>{item.emoji}</div>
-              <div style={{fontSize:13,fontWeight:700,marginBottom:4}}>{item.name}</div>
-              <div style={{fontSize:12,fontWeight:800,color:"var(--am)"}}>{c$(item.priceCents)}</div>
-              {kid&&<div style={{fontSize:10,marginTop:4,color:can?"var(--gr)":"var(--re)",fontWeight:700}}>{can?"✓ Can afford":"Need more"}</div>}
-            </div>);
-          })}
-        </div>
-      </div>
-    );
-  }
 
-  function MoneyView({kidId=null}){
-    return(
-      <div>
-        <div className="dgrid" style={{marginBottom:14}}>
-          {kids.filter(k=>!kidId||k.id===kidId).map(k=>{
-            const pal=PAL[k.colorIdx%PAL.length];
-            const bal=k.balanceCents||0;
-            const kidBills=bills.filter(b=>b.kidId===k.id&&b.active);
-            const totalBillsCents=kidBills.reduce((a,b)=>a+(b.amountCents||0),0);
-            /* How much of balance goes toward bill vs is free to spend */
-            const towardBill=Math.min(bal,totalBillsCents);
-            const billPct=totalBillsCents>0?Math.min(100,Math.round((bal/totalBillsCents)*100)):0;
-            const remainder=Math.max(0,bal-totalBillsCents);
-            const dueDate=new Date("2026-07-01T00:00:00");
-            const daysLeft=Math.max(0,Math.ceil((dueDate-new Date())/(1000*60*60*24)));
-            return(<div key={k.id} className="card">
-              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
-                <Av initials={k.initials} colorIdx={k.colorIdx} size={34}/>
-                <div style={{flex:1}}>
-                  <div style={{fontSize:14,fontWeight:800}}>{k.name}</div>
-                  <div style={{fontSize:17,fontWeight:900,color:"var(--am)"}}>{c$(bal)}</div>
-                </div>
-                {totalBillsCents>0&&<div style={{textAlign:"right"}}>
-                  <div style={{fontSize:11,color:"var(--tx3)"}}>{daysLeft}d until Jul 1</div>
-                </div>}
-              </div>
-              {totalBillsCents>0&&(
-                <div style={{marginBottom:10}}>
-                  <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"var(--tx2)",marginBottom:4}}>
-                    <span>Bill savings progress</span>
-                    <span style={{fontWeight:800,color:billPct>=100?"var(--gr)":pal.a}}>{c$(towardBill)} / {c$(totalBillsCents)} ({billPct}%)</span>
-                  </div>
-                  <div className="pbar">
-                    <div className="pbar-f" style={{width:`${billPct}%`,background:billPct>=100?"var(--gr)":pal.a}}/>
-                  </div>
-                  {remainder>0&&<div style={{fontSize:11,color:"var(--tx3)",marginTop:4}}>
-                    {c$(remainder)} available after bill
-                  </div>}
-                  {billPct>=100&&<div style={{fontSize:11,color:"var(--gr)",fontWeight:700,marginTop:4}}>
-                    🎉 Bill covered! {c$(remainder)} extra saved.
-                  </div>}
-                </div>
-              )}
-              {/* Bill breakdown if multiple bills */}
-              {kidBills.length>1&&kidBills.map(bill=>{
-                const bPct=Math.min(100,Math.round((bal/bill.amountCents)*100));
-                return(<div key={bill.id} style={{display:"flex",alignItems:"center",gap:8,marginBottom:5,fontSize:12}}>
-                  <span style={{flex:1,color:"var(--tx2)"}}>{bill.name}</span>
-                  <div className="pbar" style={{flex:2}}><div className="pbar-f" style={{width:`${bPct}%`,background:bPct>=100?"var(--gr)":pal.a}}/></div>
-                  <span style={{width:68,textAlign:"right",fontWeight:700,color:bPct>=100?"var(--gr)":"var(--tx)"}}>{c$(bill.amountCents)}</span>
-                </div>);
-              })}
-            </div>);
-          })}
-        </div>
-        <div className="card">
-          <div className="ch">Recent transactions</div>
-          {txLog.filter(tx=>!kidId||tx.actorId===kidId).slice(0,25).map((tx,i)=>{
-            const k=kidById(tx.actorId)||parById(tx.actorId);
-            return(<div key={i} className="alog-row">
-              <div style={{fontSize:11,color:"var(--tx3)",width:72,flexShrink:0}}>{new Date(tx.ts).toLocaleDateString("en-US",{month:"short",day:"numeric"})}</div>
-              <div style={{flex:1,fontSize:13}}><strong>{k?.name||"?"}</strong> — {tx.desc}</div>
-              {!!tx.cents&&<span className={`pill ${tx.cents>0?"pill-gr":"pill-am"}`}>{tx.cents>0?"+":""}{c$(Math.abs(tx.cents))}</span>}
-            </div>);
-          })}
-          {txLog.length===0&&<div className="empty" style={{padding:"1rem 0"}}>No transactions yet.</div>}
-        </div>
-      </div>
-    );
-  }
 
-  function SummerView({kidId=null}){
-    const[tab,setTab]=useState("sessions");
-    const today=ld();
-    const dow=new Date().toLocaleDateString("en-US",{weekday:"long"});
-    const focus=SFOCUS[dow];
-    const curWk=wk(today);
 
-    const KidSumCard=({kid})=>{
-      const sk=sumKids[kid.id]||{};
-      const todayDone=Object.values(sumSessions[kid.id]||{}).some(s=>s.date===today);
-      const weekSessions=Object.values(sumSessions[kid.id]||{}).filter(s=>wk(s.date)===curWk);
-      const bonusPaid=sk.weekBonusPaidFor===curWk;
-      const pal=PAL[kid.colorIdx%PAL.length];
-      return(
-        <div className="sum-card">
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-            <div style={{display:"flex",alignItems:"center",gap:8}}><Av initials={kid.initials} colorIdx={kid.colorIdx} size={30}/><span style={{fontWeight:800,fontSize:14}}>{kid.name}</span></div>
-            <div style={{textAlign:"right"}}>
-              <div style={{fontSize:13,fontWeight:800,color:"var(--pr)"}}>{weekSessions.length}/4 this week</div>
-              {bonusPaid&&<span className="pill pill-gr">✓ $1 bonus paid</span>}
-            </div>
-          </div>
-          <div style={{display:"flex",gap:6,marginBottom:8}}>
-            {["Mon","Tue","Wed","Thu"].map((d,i)=>{
-              const dayDate=Object.keys(sumSessions[kid.id]||{}).map(k=>sumSessions[kid.id][k]).find(s=>wk(s.date)===curWk&&lp(s.date).toLocaleDateString("en-US",{weekday:"short"})===d);
-              return(<div key={d} style={{flex:1,textAlign:"center",background:dayDate?"var(--grl)":"var(--bg)",border:`1px solid ${dayDate?"#A7F3D0":"var(--bdr)"}`,borderRadius:7,padding:"4px 2px",fontSize:10,fontWeight:700,color:dayDate?"var(--gr)":"var(--tx3)"}}>
-                {d}<br/>{dayDate?"✓":"–"}
-              </div>);
-            })}
-          </div>
-          {!focus?<div style={{fontSize:12,color:"var(--tx3)"}}>🏖️ No session today</div>:
-          todayDone?<div style={{background:"var(--grl)",border:"1px solid #A7F3D0",borderRadius:8,padding:"8px 12px",fontSize:13,color:"var(--gr)",fontWeight:700}}>✅ Today's session done!</div>:(
-            <div>
-              <div style={{fontSize:12,color:"var(--tx2)",marginBottom:7}}>Today: <strong>{focus==="math"?"🔢 Math":"📖 Literacy"}</strong></div>
-              <button className="btn bp" style={{width:"100%",justifyContent:"center",padding:"11px",fontSize:14,fontWeight:800}} onClick={()=>completeSummerSession(kid.id,kid.name)}>✅ Mark Session Complete</button>
-            </div>
-          )}
-          {parentMode&&weekSessions.length>=4&&!bonusPaid&&(
-            <button className="btn bte" style={{width:"100%",justifyContent:"center",marginTop:8,fontSize:13}} onClick={()=>triggerSummerBonus(kid.id)}>
-              🎉 Award $1 weekly bonus for {kid.name}
-            </button>
-          )}
-        </div>
-      );
-    };
 
-    return(
-      <div>
-        {sumActive()
-          ?<div style={{background:"var(--prl)",border:"1px solid #C7D2FE",borderRadius:10,padding:"8px 14px",fontSize:12,color:"var(--pr)",fontWeight:600,marginBottom:12}}>☀️ Program active · Week {sumWeeks()} of ~10 · Complete all 4 Mon–Thu sessions for a $1.00 bonus</div>
-          :<div style={{background:"var(--grl)",border:"1px solid #A7F3D0",borderRadius:10,padding:"8px 14px",fontSize:12,color:"var(--gr)",fontWeight:600,marginBottom:12}}>☀️ Summer program starts June 1, 2026</div>}
-        <div style={{display:"flex",gap:6,marginBottom:12}} className="no-print">
-          {[{id:"sessions",l:"Sessions"},{id:"reports",l:"Reports"}].map(t=>(
-            <button key={t.id} className={`btn bsm ${tab===t.id?"bp":"bg"}`} onClick={()=>setTab(t.id)}>{t.l}</button>
-          ))}
-        </div>
-        {tab==="sessions"&&(
-          <div>
-            {parentMode&&!kidId&&(
-              <div className="card" style={{marginBottom:12,background:"var(--prl)",border:"1px solid #C7D2FE"}}>
-                <div className="ch" style={{color:"var(--pr)"}}>⚡ Credit past sessions</div>
-                <p style={{fontSize:12,color:"var(--tx2)",marginBottom:10,lineHeight:1.6}}>Backfill Mon–Thu sessions for kids who completed them but weren't logged in the app yet.</p>
-                <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                  {kids.map(k=>(
-                    <button key={k.id} className="btn bbl bsm" onClick={()=>backfillSessions(k.id,k.name,4)}>
-                      Credit {k.name} (4 sessions)
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-            {kidId?<KidSumCard kid={kidById(kidId)}/>:kids.map(k=><KidSumCard key={k.id} kid={k}/>)}
-          </div>
-        )}
-        {tab==="reports"&&(
-          <div>
-            <button className="btn bte bsm" style={{marginBottom:12}} onClick={async()=>{
-              const curWk2=wk(ld());
-              const upd={};
-              for(const k of kids){
-                const sessions=Object.values(sumSessions[k.id]||{}).filter(s=>wk(s.date)===curWk2);
-                upd[`wh/summerProgram/reports/${k.id}/${curWk2}`]={generatedAt:Date.now(),kidName:k.name,weekKey:curWk2,sessionsCompleted:sessions.length,sessionsScheduled:4,attendanceRate:(sessions.length/4).toFixed(2),bonusPaid:sumKids[k.id]?.weekBonusPaidFor===curWk2};
-              }
-              await FB.atomic(upd);toast("Report generated ✓","success");
-            }}>⚡ Generate This Week's Report</button>
-            <div className="rgrid">
-              {kids.map((k,i)=>{
-                const curWk2=wk(ld());
-                const sessions=Object.values(sumSessions[k.id]||{}).filter(s=>wk(s.date)===curWk2);
-                const sk=sumKids[k.id]||{};
-                const bonusPaid=sk.weekBonusPaidFor===curWk2;
-                const pal=PAL[i%PAL.length];
-                return(<div key={k.id} style={{background:"var(--sur)",border:"1px solid var(--bdr)",borderLeft:`4px solid ${pal.a}`,borderRadius:12,overflow:"hidden"}}>
-                  <div style={{padding:"9px 13px",background:pal.l,display:"flex",justifyContent:"space-between"}}>
-                    <strong style={{color:pal.t}}>{k.name}</strong>
-                    <span style={{fontSize:11,color:pal.t}}>{curWk2}</span>
-                  </div>
-                  <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",borderBottom:"1px solid var(--bdr)"}}>
-                    {[{v:`${sessions.length}/4`,l:"sessions"},{v:`${Math.round((sessions.length/4)*100)}%`,l:"attend."},{v:bonusPaid?"✓ $1":"–",l:"bonus"}].map((s,j)=>(
-                      <div key={j} style={{padding:"8px 6px",textAlign:"center",borderRight:j<2?"1px solid var(--bdr)":"none"}}>
-                        <div style={{fontSize:15,fontWeight:800}}>{s.v}</div>
-                        <div style={{fontSize:9,color:"var(--tx3)",textTransform:"uppercase",letterSpacing:".05em"}}>{s.l}</div>
-                      </div>
-                    ))}
-                  </div>
-                  {parentMode&&sessions.length>=4&&!bonusPaid&&(
-                    <div style={{padding:"8px 13px"}}><button className="btn bte bsm" style={{width:"100%",justifyContent:"center"}} onClick={()=>triggerSummerBonus(k.id)}>Award $1 bonus</button></div>
-                  )}
-                </div>);
-              })}
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  function WeeklyCheckinView(){
-    const curWk=wk(ld());
-    const kidStats=kids.map(k=>{
-      const earned=weekEarned(k.id,curWk);
-      const goal=k.goal?.weeklyTargetCents||300;
-      const gpct=Math.min(100,Math.round((earned/goal)*100));
-      const completions=Object.entries(comps).filter(([d])=>wk(d)===curWk).flatMap(([,dc])=>Object.entries(dc).filter(([key])=>key.includes(k.id)&&dc[key].status==="done"||dc[key].status==="approved"));
-      const monthK=mk(ld());
-      const billsPaid=k.balanceCents||0; // current balance vs bills due
-      const totalBillsAmt=bills.filter(b=>b.kidId===k.id&&b.active).reduce((a,b)=>a+(b.amountCents||0),0);
-      const sk=sumKids[k.id]||{};
-      const sumSess=Object.values(sumSessions[k.id]||{}).filter(s=>wk(s.date)===curWk).length;
-      return{k,earned,goal,gpct,completions:completions.length,billsPaid,totalBillsAmt,sk,sumSess};
-    });
-    return(
-      <div>
-        <div style={{background:"var(--prl)",border:"1px solid #C7D2FE",borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:13,color:"var(--pr)",fontWeight:700}}>
-          📋 Weekly check-in — {curWk}
-        </div>
-        <div className="wk-grid">
-          {kidStats.map(({k,earned,goal,gpct,completions,billsPaid,totalBillsAmt,sk,sumSess})=>{
-            const pal=PAL[k.colorIdx%PAL.length];
-            const onTrack=gpct>=75;
-            const billOnTrack=totalBillsAmt===0||billsPaid>=totalBillsAmt;
-            return(<div key={k.id} className="wk-card" style={{borderLeft:`4px solid ${pal.a}`}}>
-              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
-                <Av initials={k.initials} colorIdx={k.colorIdx} size={30}/>
-                <div style={{flex:1}}>
-                  <div style={{fontSize:14,fontWeight:800}}>{k.name}</div>
-                  <span className={`pill ${onTrack?"pill-gr":"pill-am"}`}>{onTrack?"On track":"Needs work"}</span>
-                </div>
-                <div style={{fontSize:16,fontWeight:900,color:"var(--gr)"}}>{c$(earned)}</div>
-              </div>
-              <div className="wk-stat"><span>Chores completed</span><strong>{completions}</strong></div>
-              <div className="wk-stat"><span>Weekly goal</span><strong style={{color:gpct>=100?"var(--gr)":"var(--tx)"}}>{c$(earned)} / {c$(goal)} ({gpct}%)</strong></div>
-              {totalBillsAmt>0&&<div className="wk-stat"><span>Bill progress</span><strong style={{color:billOnTrack?"var(--gr)":"var(--re)"}}>{c$(billsPaid)} / {c$(totalBillsAmt)}</strong></div>}
-              {sumActive()&&<div className="wk-stat"><span>Summer sessions</span><strong>{sumSess}/4{sumSess>=4?" 🎉":""}</strong></div>}
-              <div className="wk-stat"><span>Balance</span><strong style={{color:"var(--am)"}}>{c$(k.balanceCents||0)}</strong></div>
-              {sumActive()&&sumSess>=4&&sumKids[k.id]?.weekBonusPaidFor!==curWk&&(
-                <button className="btn bte bsm" style={{width:"100%",justifyContent:"center",marginTop:8}} onClick={()=>triggerSummerBonus(k.id)}>
-                  🎉 Pay $1 summer bonus
-                </button>
-              )}
-            </div>);
-          })}
-        </div>
-        <div className="card" style={{marginTop:14}}>
-          <div className="ch">Parent contributions this week</div>
-          {parents.map(p=>{
-            const tasks=Object.entries(parentLog).filter(([d])=>wk(d)===curWk).flatMap(([,logs])=>Object.values(logs||{}).filter(l=>l.parentId===p.id));
-            return(<div key={p.id} style={{marginBottom:8}}>
-              <div style={{display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:700,marginBottom:4}}><span>{p.name}</span><span style={{color:"var(--tx2)"}}>{tasks.length} tasks</span></div>
-              {tasks.slice(0,4).map((t,i)=><div key={i} style={{fontSize:12,color:"var(--tx2)",paddingLeft:8}}>{t.desc}</div>)}
-            </div>);
-          })}
-        </div>
-      </div>
-    );
-  }
-
-  function SettingsView(){
-    return(<div className="card">
-      {[
-        {l:"Firebase",s:ready?`🟢 Connected${!online?" · ⚠️ Offline":""}`:  "🔴 Demo mode",btn:"Configure",fn:()=>setShowCfg(true)},
-        {l:"Parent PIN",s:hasPIN?"PIN is set":"No PIN set",btn:hasPIN?"Change":"Set PIN",fn:()=>setScreen("pin-set")},
-        {l:"Parent mode",s:"Manage chores, approve, edit",custom:true},
-      ].map(r=>(
-        <div key={r.l} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"11px 0",borderBottom:"1px solid var(--bdr)"}}>
-          <div><div style={{fontWeight:700,fontSize:13}}>{r.l}</div><div style={{fontSize:11,color:"var(--tx2)",marginTop:2}}>{r.s}</div></div>
-          {r.custom?<label className="sw"><input type="checkbox" checked={parentMode} onChange={e=>setParentMode(e.target.checked)}/><div className="sw-t"/><div className="sw-th"/></label>
-            :<button className="btn bg bsm" onClick={r.fn}>{r.btn}</button>}
-        </div>
-      ))}
-    </div>);
-  }
 
   /* ── Modals ── */
-  function ChoreModalComp(){
-    const m=choreModal;
-    const isQuick=m?.mode==="quick";
-    const blank={title:"",diff:"easy",scheduleType:"daily",scheduleDays:[],assignedTo:[],priceCents:25,requiresApproval:false,repeating:false};
-    const[f,setF]=useState(m?.data||blank);
-    const[oneTimeOnly,setOneTimeOnly]=useState(false);
-    const tog=(arr,v)=>arr?.includes(v)?arr.filter(x=>x!==v):[...(arr||[]),v];
-    const allActors=[...kids,...parents];
-    return(<div className="overlay" onClick={()=>setChoreModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
-      <div className="modal-h">{m?.mode==="edit"?"Edit Chore":isQuick?"Quick Add Chore":"Add Chore"}</div>
-      <div className="fg"><label className="fl">Title</label><input className="fi" placeholder="Chore name" value={f.title} onChange={e=>setF(x=>({...x,title:e.target.value}))}/></div>
-      <div style={{display:"flex",gap:8}}>
-        <div className="fg" style={{flex:1}}>
-          <label className="fl">Difficulty</label>
-          <select className="fi" value={f.diff} onChange={e=>{const d=e.target.value;setF(x=>({...x,diff:d,priceCents:d==="easy"?25:d==="medium"?50:100}));}}>
-            <option value="easy">Easy — $0.25</option>
-            <option value="medium">Medium — $0.50</option>
-            <option value="hard">Hard — $1.00</option>
-          </select>
-        </div>
-        <div className="fg" style={{flex:1}}>
-          <label className="fl">Amount ($)</label>
-          <input className="fi" type="number" step="0.05" min="0" value={(f.priceCents/100).toFixed(2)} onChange={e=>setF(x=>({...x,priceCents:Math.round(parseFloat(e.target.value)*100)||25}))}/>
-        </div>
-      </div>
-      {!isQuick&&<>
-        <div className="fg"><label className="fl">Schedule</label>
-          <select className="fi" value={f.scheduleType} onChange={e=>setF(x=>({...x,scheduleType:e.target.value}))}>
-            <option value="daily">Every day</option><option value="weekly">Specific days</option>
-          </select></div>
-        {f.scheduleType==="weekly"&&<div className="fg"><label className="fl">Days</label>
-          <div className="frow">{DAYS.map(d=><button key={d} className={`btn bsm ${f.scheduleDays?.includes(d)?"bp":"bg"}`} onClick={()=>setF(x=>({...x,scheduleDays:tog(x.scheduleDays,d)}))}>{d}</button>)}</div></div>}
-      </>}
-      <div className="fg"><label className="fl">Assign to (leave empty = today only for quick add)</label>
-        <div className="frow">{allActors.map(a=><button key={a.id} className={`btn bsm ${f.assignedTo?.includes(a.id)?"bp":"bg"}`} onClick={()=>setF(x=>({...x,assignedTo:tog(x.assignedTo,a.id)}))}>{a.name}</button>)}</div></div>
-      {m?.mode==="edit"&&<div className="sw-row" style={{fontSize:13}}><span style={{fontWeight:600}}>Change for today only</span><label className="sw"><input type="checkbox" checked={oneTimeOnly} onChange={e=>setOneTimeOnly(e.target.checked)}/><div className="sw-t"/><div className="sw-th"/></label></div>}
-      <div className="sw-row" style={{fontSize:13}}><span style={{fontWeight:600}}>Requires approval</span><label className="sw"><input type="checkbox" checked={!!f.requiresApproval} onChange={e=>setF(x=>({...x,requiresApproval:e.target.checked}))}/><div className="sw-t"/><div className="sw-th"/></label></div>
-      <div className="fax">
-        {m?.data?.id&&<button className="btn bco" onClick={()=>{deleteChore(m.data.id);setChoreModal(null);}}>Delete</button>}
-        <button className="btn bg" onClick={()=>setChoreModal(null)}>Cancel</button>
-        <button className="btn bp" onClick={()=>{if(!f.title.trim())return;saveChore(f,oneTimeOnly?selDate:null);setChoreModal(null);}}>
-          {m?.mode==="edit"?"Save":"Add chore"}
-        </button>
-      </div>
-    </div></div>);
-  }
 
-  function EditCompModalComp(){
-    const m=editCompModal;
-    const[cents,setCents]=useState((m?.comp?.cents||0)/100);
-    const[note,setNote]=useState("");
-    const[remove,setRemove]=useState(false);
-    if(!m)return null;
-    return(<div className="overlay" onClick={()=>setEditCompModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
-      <div className="modal-h">✏️ Edit Completion</div>
-      <div className="fg"><label className="fl">Adjusted amount ($)</label>
-        <input className="fi" type="number" step="0.05" min="0" value={cents} onChange={e=>setCents(parseFloat(e.target.value)||0)} disabled={remove}/></div>
-      <div className="fg"><label className="fl">Reason for change (required)</label>
-        <textarea className="fi" placeholder="e.g. Only half done, missed a section..." value={note} onChange={e=>setNote(e.target.value)}/></div>
-      <div className="sw-row" style={{fontSize:13}}><span style={{fontWeight:600,color:"var(--re)"}}>Remove this completion entirely</span>
-        <label className="sw"><input type="checkbox" checked={remove} onChange={e=>setRemove(e.target.checked)}/><div className="sw-t"/><div className="sw-th"/></label></div>
-      <div className="fax">
-        <button className="btn bg" onClick={()=>setEditCompModal(null)}>Cancel</button>
-        <button className="btn bp" disabled={!note.trim()} onClick={()=>editComp(m.dk,m.choreId,m.actorId,{newCents:Math.round(cents*100),remove,note})}>Save changes</button>
-      </div>
-    </div></div>);
-  }
 
-  function BillModalComp(){
-    const b=billModal;
-    const[f,setF]=useState(b?.id?b:{kidId:"k1",name:"",amountCents:4500,type:"monthly",active:true});
-    return(<div className="overlay" onClick={()=>setBillModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
-      <div className="modal-h">{b?.id?"Edit Bill":"Add Bill"}</div>
-      <div className="fg"><label className="fl">Kid</label>
-        <select className="fi" value={f.kidId} onChange={e=>setF(x=>({...x,kidId:e.target.value}))}>
-          {kids.map(k=><option key={k.id} value={k.id}>{k.name}</option>)}
-        </select></div>
-      <div className="fg"><label className="fl">Bill name</label><input className="fi" placeholder="Cell phone, Soccer..." value={f.name} onChange={e=>setF(x=>({...x,name:e.target.value}))}/></div>
-      <div style={{display:"flex",gap:8}}>
-        <div className="fg" style={{flex:1}}><label className="fl">Amount ($)</label>
-          <input className="fi" type="number" step="0.01" value={(f.amountCents/100).toFixed(2)} onChange={e=>setF(x=>({...x,amountCents:Math.round(parseFloat(e.target.value)*100)||0}))}/></div>
-        <div className="fg" style={{flex:1}}><label className="fl">Type</label>
-          <select className="fi" value={f.type} onChange={e=>setF(x=>({...x,type:e.target.value}))}>
-            <option value="monthly">Monthly</option><option value="goal">One-time goal</option>
-          </select></div>
-      </div>
-      <div className="fax">
-        <button className="btn bg" onClick={()=>setBillModal(null)}>Cancel</button>
-        <button className="btn bp" onClick={async()=>{
-          if(!f.name.trim())return;
-          const id=f.id||`b${Date.now()}`;
-          await FB.write(`wh/bills/${id}`,{...f,id});
-          toast(f.id?"Bill updated":"Bill added","success");setBillModal(null);
-        }}>{b?.id?"Save":"Add bill"}</button>
-      </div>
-    </div></div>);
-  }
 
-  function PayBillModalComp(){
-    const m=payBillModal;
-    const kid=kidById(m?.kidId);
-    const[amt,setAmt]=useState(m?.bill?((m.bill.amountCents)/100).toFixed(2):"");
-    if(!m||!kid)return null;
-    return(<div className="overlay" onClick={()=>setPayBillModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
-      <div className="modal-h">💸 Pay Bill: {m.bill.name}</div>
-      <p style={{fontSize:13,color:"var(--tx2)",marginBottom:14}}>
-        {kid.name}'s balance: <strong style={{color:"var(--am)"}}>{c$(kid.balanceCents||0)}</strong><br/>
-        Bill amount: <strong style={{color:"var(--re)"}}>{c$(m.bill.amountCents)}</strong>
-      </p>
-      <div className="fg"><label className="fl">Amount to pay ($)</label>
-        <input className="fi" type="number" step="0.01" value={amt} onChange={e=>setAmt(e.target.value)}/></div>
-      <div className="fax">
-        <button className="btn bg" onClick={()=>setPayBillModal(null)}>Cancel</button>
-        <button className="btn bp" onClick={()=>{const c=Math.round(parseFloat(amt)*100);if(c>0){payBill(m.bill.id,m.kidId,c);setPayBillModal(null);}}}>Pay {amt?c$(Math.round(parseFloat(amt)*100)):""}</button>
-      </div>
-    </div></div>);
-  }
 
-  function PoolAddModalComp(){
-    const[f,setF]=useState({title:"",diff:"medium",priceCents:50,note:"",repeating:true});
-    return(<div className="overlay" onClick={()=>setPoolAddModal(false)}><div className="modal" onClick={e=>e.stopPropagation()}>
-      <div className="modal-h">➕ Add Pool Chore</div>
-      <div className="fg"><label className="fl">Title</label><input className="fi" placeholder="e.g. Sweep porch" value={f.title} onChange={e=>setF(x=>({...x,title:e.target.value}))}/></div>
-      <div style={{display:"flex",gap:8}}>
-        <div className="fg" style={{flex:1}}><label className="fl">Difficulty</label>
-          <select className="fi" value={f.diff} onChange={e=>{const d=e.target.value;setF(x=>({...x,diff:d,priceCents:d==="easy"?25:d==="medium"?50:100}));}}>
-            <option value="easy">Easy — $0.25</option><option value="medium">Medium — $0.50</option><option value="hard">Hard — $1.00</option>
-          </select></div>
-        <div className="fg" style={{flex:1}}><label className="fl">Amount ($)</label>
-          <input className="fi" type="number" step="0.05" value={(f.priceCents/100).toFixed(2)} onChange={e=>setF(x=>({...x,priceCents:Math.round(parseFloat(e.target.value)*100)||25}))}/></div>
-      </div>
-      <div className="fg"><label className="fl">Note (optional)</label><input className="fi" placeholder="Any details..." value={f.note} onChange={e=>setF(x=>({...x,note:e.target.value}))}/></div>
-      <div className="sw-row" style={{fontSize:13}}><span style={{fontWeight:600}}>Repeating (resets after each completion)</span><label className="sw"><input type="checkbox" checked={f.repeating} onChange={e=>setF(x=>({...x,repeating:e.target.checked}))}/><div className="sw-t"/><div className="sw-th"/></label></div>
-      <div className="fax">
-        <button className="btn bg" onClick={()=>setPoolAddModal(false)}>Cancel</button>
-        <button className="btn bp" onClick={()=>{if(!f.title.trim())return;addPoolChore(f);setPoolAddModal(false);}}>Add to pool</button>
-      </div>
-    </div></div>);
-  }
 
-  function PoolEditModalComp(){
-    const c=poolEditModal;
-    const AREAS=Array.from(new Set(pool.map(p=>p.area).filter(Boolean))).sort();
-    const[f,setF]=useState({
-      title:c.title||"",
-      area:c.area||"",
-      freq:c.freq||(c.recurring?"weekly":""),
-      priceCents:c.priceCents||25,
-      note:c.note||"",
-      recurring:c.recurring!==undefined?!!c.recurring:!!c.freq,
-    });
-    function save(){
-      if(!f.title.trim())return;
-      const patch={title:f.title.trim(),area:f.area.trim(),priceCents:f.priceCents,note:f.note,recurring:f.recurring};
-      if(f.recurring&&f.freq){patch.freq=f.freq;patch.intervalDays=INTERVAL_DAYS[f.freq]||7;}
-      updatePoolChore(c.id,patch);
-      setPoolEditModal(null);
-    }
-    return(<div className="overlay" onClick={()=>setPoolEditModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
-      <div className="modal-h">✏️ Edit Pool Chore</div>
-      <div className="fg"><label className="fl">Title</label><input className="fi" value={f.title} onChange={e=>setF(x=>({...x,title:e.target.value}))}/></div>
-      <div style={{display:"flex",gap:8}}>
-        <div className="fg" style={{flex:1}}><label className="fl">Frequency</label>
-          <select className="fi" value={f.recurring?f.freq:"none"} onChange={e=>{const v=e.target.value;if(v==="none")setF(x=>({...x,recurring:false}));else setF(x=>({...x,recurring:true,freq:v}));}}>
-            <option value="none">One-time / on demand</option>
-            {FREQ_OPTS.map(o=><option key={o} value={o}>{FREQ_LBL[o]}</option>)}
-          </select></div>
-        <div className="fg" style={{flex:1}}><label className="fl">Amount ($)</label>
-          <input className="fi" type="number" step="0.05" min="0" value={(f.priceCents/100).toFixed(2)} onChange={e=>setF(x=>({...x,priceCents:Math.round(parseFloat(e.target.value)*100)||25}))}/></div>
-      </div>
-      {f.recurring&&f.freq&&<div style={{fontSize:11,color:"var(--tx2)",marginTop:-4,marginBottom:8}}>Resets every {INTERVAL_DAYS[f.freq]} day(s) after it's completed.</div>}
-      <div className="fg"><label className="fl">Room / area</label>
-        <input className="fi" list="poolAreas" placeholder="e.g. Kitchen" value={f.area} onChange={e=>setF(x=>({...x,area:e.target.value}))}/>
-        <datalist id="poolAreas">{AREAS.map(a=><option key={a} value={a}/>)}</datalist>
-      </div>
-      <div className="fg"><label className="fl">Note (optional)</label><input className="fi" value={f.note} onChange={e=>setF(x=>({...x,note:e.target.value}))}/></div>
-      <div className="fax">
-        <button className="btn bco" onClick={()=>{removePoolChore(c.id);setPoolEditModal(null);}}>Delete</button>
-        <button className="btn bg" onClick={()=>setPoolEditModal(null)}>Cancel</button>
-        <button className="btn bp" onClick={save}>Save</button>
-      </div>
-    </div></div>);
-  }
 
-  function ParentTaskModalComp(){
-    const[desc,setDesc]=useState("");
-    const[who,setWho]=useState(parentTaskModal?.parentId||parents[0]?.id);
-    return(<div className="overlay" onClick={()=>setParentTaskModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
-      <div className="modal-h">✅ Log Parent Task</div>
-      <div className="fg"><label className="fl">Who did it?</label>
-        <div className="frow">{parents.map(p=><button key={p.id} className={`btn bsm ${who===p.id?"bp":"bg"}`} onClick={()=>setWho(p.id)}>{p.name}</button>)}</div></div>
-      <div className="fg"><label className="fl">What did you do?</label><input className="fi" placeholder="e.g. Cleaned bathroom, mowed lawn..." value={desc} onChange={e=>setDesc(e.target.value)}/></div>
-      <div className="fax">
-        <button className="btn bg" onClick={()=>setParentTaskModal(null)}>Cancel</button>
-        <button className="btn bp" onClick={()=>{if(!desc.trim())return;logParentTask(who,desc);setParentTaskModal(null);}}>Log task</button>
-      </div>
-    </div></div>);
-  }
 
   /* Focus Timer */
   /* BonusModal is hoisted to top level (BonusModalC) so App re-renders —
      which happen on every Firebase update and toast — don't remount it and
      silently reset the typed amount back to $0.50. */
 
-  function NoteModal(){
-    const m=noteModal;
-    const kid=m?kidById(m.kidId):null;
-    const[note,setNote]=useState(kid?.latestNote||"");
-    if(!m||!kid)return null;
-    return(<div className="overlay" onClick={()=>setNoteModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
-      <div className="modal-h">📝 Note for {m.kidName}</div>
-      <p style={{fontSize:12,color:"var(--tx2)",marginBottom:12,lineHeight:1.6}}>This note appears on {m.kidName}'s dashboard card so they see it when you open the app together.</p>
-      <div className="fg"><label className="fl">Message</label>
-        <textarea className="fi" rows={3} placeholder="Great job this week! Keep it up..." value={note} onChange={e=>setNote(e.target.value)}/></div>
-      <div className="fax">
-        <button className="btn bg" onClick={()=>{saveNote(m.kidId,"");setNoteModal(null);}}>Clear note</button>
-        <button className="btn bg" onClick={()=>setNoteModal(null)}>Cancel</button>
-        <button className="btn bp" onClick={()=>{saveNote(m.kidId,note);setNoteModal(null);}}>Save note</button>
-      </div>
-    </div></div>);
-  }
 
-  function FocusTimer(){
-    const D=25*60;
-    const[s,setS]=useState(D);const[run,setRun]=useState(false);const[done,setDone]=useState(false);const[sk,setSk]=useState(kids[0]?.id||"");
-    const t=useRef(null);
-    const start=()=>{setRun(true);t.current=setInterval(()=>setS(x=>{if(x<=1){clearInterval(t.current);setRun(false);setDone(true);return 0;}return x-1;}),1000);};
-    const pause=()=>{clearInterval(t.current);setRun(false);};
-    const reset=()=>{clearInterval(t.current);setRun(false);setDone(false);setS(D);};
-    useEffect(()=>()=>clearInterval(t.current),[]);
-    const pct=(s/D)*100,r=56,c=2*Math.PI*r;
-    const mm=String(Math.floor(s/60)).padStart(2,"0"),ss=String(s%60).padStart(2,"0");
-    return(<div className="overlay"><div className="modal" style={{textAlign:"center"}}>
-      <div style={{fontSize:15,fontWeight:800,marginBottom:14}}>⏱ Focus Timer</div>
-      <div style={{width:140,height:140,margin:"0 auto 14px",position:"relative"}}>
-        <svg style={{transform:"rotate(-90deg)"}} width="140" height="140" viewBox="0 0 140 140">
-          <circle cx="70" cy="70" r={r} fill="none" stroke="var(--bg)" strokeWidth="8"/>
-          <circle cx="70" cy="70" r={r} fill="none" stroke="var(--pr)" strokeWidth="8"
-            strokeDasharray={c} strokeDashoffset={c*(1-pct/100)} strokeLinecap="round"/>
-        </svg>
-        <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:30,fontWeight:900}}>{mm}:{ss}</div>
-      </div>
-      {done?(<div style={{marginBottom:14}}>
-        <div style={{color:"var(--gr)",fontWeight:800,marginBottom:10}}>🎉 Done! Award bonus?</div>
-        <select className="fi" value={sk} onChange={e=>setSk(e.target.value)}><option value="">No bonus</option>{kids.map(k=><option key={k.id} value={k.id}>{k.name}</option>)}</select>
-      </div>):(
-        <div style={{display:"flex",gap:8,justifyContent:"center",marginBottom:14}}>
-          {!run?<button className="btn bp" onClick={start}>▶ Start</button>:<button className="btn bg" onClick={pause}>⏸ Pause</button>}
-          <button className="btn bg" onClick={reset}>↺</button>
-        </div>
-      )}
-      <div style={{display:"flex",gap:8,justifyContent:"center"}}>
-        {done&&sk&&<button className="btn bte" onClick={()=>{awardXp(sk,50);setShowTimer(false);}}>+$0.50 & Close</button>}
-        <button className="btn bg" onClick={()=>setShowTimer(false)}>Close</button>
-      </div>
-    </div></div>);
-  }
 
   /* ── Kid Mode ── */
-  function KidModeApp(){
-    const isParActor=!!activeParent;
-    const actor=isParActor?parById(activeParent):kidById(activeKid);
-    const[kmTab,setKmTab]=useState("tasks");
-    if(!actor)return null;
-    const pal=PAL[(actor.colorIdx||0)%PAL.length];
-    const bal=!isParActor?c$(kidById(activeKid)?.balanceCents||0):"";
-    const tabs=isParActor
-      ?[{id:"tasks",l:"✓ Tasks"},{id:"pool",l:"🎯 Pool"},{id:"log",l:"📝 Log Task"}]
-      :[{id:"tasks",l:"✓ Tasks"},{id:"pool",l:"🎯 Pool"},{id:"summer",l:"☀️ Summer"},{id:"bills",l:"💸 Bills"},{id:"store",l:"🛍 Store"},{id:"money",l:"💰 Money"}];
-    return(<div className="km-wrap">
-      {!online&&ready&&<div className="offline-bar">⚠️ Offline</div>}
-      <div className="km-hdr" style={{flexDirection:"column",alignItems:"stretch",gap:8}}>
-        <div style={{display:"flex",alignItems:"center",gap:11}}>
-          <Av initials={actor.initials} colorIdx={actor.colorIdx||0} size={38}/>
-          <div style={{flex:1}}>
-            <div style={{fontSize:16,fontWeight:900}}>{actor.name}</div>
-            {!isParActor&&<div style={{fontSize:12,fontWeight:800,color:"var(--am)"}}>{bal}</div>}
-          </div>
-          <button className="btn bg bsm" onClick={exitToPicker}>← Home</button>
+
+  /* ── Screen routing ── */
+
+  const A={fbCfg,setFbCfg,showCfg,setShowCfg,FB,ready,uid,online,kids,setKids,parents,setParents,chores,setChores,pool,setPool,comps,setComps,parentLog,setParentLog,storeItems,setStoreItems,txLog,setTxLog,bills,setBills,billPay,setBillPay,allowedUids,setAllowedUids,sumKids,setSumKids,sumSessions,setSumSessions,weeklyCheckins,setWeeklyCheckins,screen,setScreen,view,setView,activeKid,setActiveKid,activeParent,setActiveParent,parentMode,setParentMode,selDate,setSelDate,optim,setOptim,choreModal,setChoreModal,editCompModal,setEditCompModal,billModal,setBillModal,payBillModal,setPayBillModal,poolAddModal,setPoolAddModal,poolEditModal,setPoolEditModal,parentTaskModal,setParentTaskModal,checkinModal,setCheckinModal,showTimer,setShowTimer,bonusModal,setBonusModal,noteModal,setNoteModal,toasts,toast,kidById,parById,getComp,isToday,isScheduled,getOverride,pendCount,hasPIN,isAdmin,myClaimedPool,EARN_TYPES,weekEarned,monthEarned,remainingAssignedCents,parentContrib,billProgress,saveCfg,enterKid,enterParent,enterParentProfile,exitToPicker,goPin,completeChore,approveComp,rejectComp,editComp,claimPool,completePool,uncompletePool,logParentTask,saveChore,deleteChore,addPoolChore,removePoolChore,seedCleaningPool,updatePoolChore,payBill,triggerSummerBonus,completeSummerSession,backfillSessions,giveBonus,saveNote,awardXp,combos,comboModal,setComboModal,saveCombo,removeCombo,unclaimPool,settleModal,setSettleModal,settleBill};
+  return(<AppCtx.Provider value={A}><Shell/></AppCtx.Provider>);
+}
+
+/* ─── HOISTED COMPONENTS (stable identity — no remount on data updates) ─── */
+function ChoresView({actorId,isParent=false,isParentActor=false}){
+  const{approveComp,chores,completeChore,completePool,getComp,getOverride,isScheduled,isToday,kidById,kids,myClaimedPool,optim,parById,pendCount,rejectComp,selDate,setChoreModal,setEditCompModal,setSelDate,unclaimPool}=useA();
+  const filtered=chores.filter(c=>{
+    const override=getOverride(c,selDate);
+    const assigned=override?.assignedTo||(c.assignedTo||[]);
+    if(actorId&&!assigned.includes(actorId))return false;
+    return isScheduled(c,selDate);
+  });
+  const dateLabel=isToday?"Today":lp(selDate).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"});
+  return(
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+        <button className="btn bg bsm" onClick={()=>{const d=lp(selDate);d.setDate(d.getDate()-1);setSelDate(d.toLocaleDateString("en-CA"));}}>‹</button>
+        <span style={{flex:1,textAlign:"center",fontSize:14,fontWeight:700}}>{dateLabel}</span>
+        <button className="btn bg bsm" disabled={isToday} onClick={()=>{const d=lp(selDate);d.setDate(d.getDate()+1);const s=d.toLocaleDateString("en-CA");if(s<=ld())setSelDate(s);}}>›</button>
+      </div>
+      {isParent&&pendCount>0&&(
+        <div className="card" style={{marginBottom:12,borderColor:"#FCD34D"}}>
+          <div className="ch">⏳ Pending approval</div>
+          {chores.filter(c=>c.requiresApproval).flatMap(c=>kids.map(k=>{
+            const comp=getComp(ld(),c.id,k.id);
+            if(comp?.status!=="pending")return null;
+            return(<div key={k.id+c.id} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:"1px solid var(--bdr)"}}>
+              <span style={{flex:1,fontSize:13}}><strong>{k.name}</strong> — {c.title}</span>
+              <button className="btn bte bxs" onClick={()=>approveComp(ld(),c.id,k.id)}>✓</button>
+              <button className="btn bco bxs" onClick={()=>rejectComp(ld(),c.id,k.id)}>✗</button>
+            </div>);
+          }).filter(Boolean))}
         </div>
-        {!isParActor&&(()=>{
-          const kid2=kidById(activeKid);
-          const kidBills2=bills.filter(b=>b.kidId===activeKid&&b.active);
-          const totalBills2=kidBills2.reduce((a,b)=>a+(b.amountCents||0),0);
-          const bal2=kid2?.balanceCents||0;
-          const dueDate2=new Date("2026-07-01T00:00:00");
-          const daysLeft2=Math.max(0,Math.ceil((dueDate2-new Date())/(1000*60*60*24)));
-          const pal2=PAL[(kid2?.colorIdx||0)%PAL.length];
-          if(!totalBills2)return null;
-          const billPct2=Math.min(100,Math.round((bal2/totalBills2)*100));
-          return(<div style={{paddingTop:4}}>
-            {kidBills2.map(bill=>{
-              const bPct=Math.min(100,Math.round((bal2/bill.amountCents)*100));
-              return(<div key={bill.id} style={{marginBottom:5}}>
-                <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}>
-                  <span style={{color:"var(--tx2)",fontWeight:600}}>{bill.name}</span>
-                  <span style={{fontWeight:800,color:bPct>=100?"var(--gr)":pal2.a}}>{c$(bal2)} / {c$(bill.amountCents)} · {daysLeft2}d left</span>
+      )}
+      {filtered.length===0?(<div className="empty"><div style={{fontSize:28,marginBottom:6}}>🎉</div><div style={{fontWeight:700}}>Nothing scheduled</div></div>):(
+        filtered.map(c=>{
+          const override=getOverride(c,selDate);
+          const assigned=override?.assignedTo||(c.assignedTo||[]);
+          const actors=actorId?[actorId]:assigned;
+          return actors.map(aId=>{
+            const actor=kidById(aId)||parById(aId);
+            if(!actor)return null;
+            const key=`${c.id}_${aId}`;
+            const comp=getComp(selDate,c.id,aId); /* reads from viewed date */
+            const isOpt=optim[key];
+            const status=comp?.status||"none";
+            const isDone=status==="done"||status==="approved";
+            const pal=PAL[(actor.colorIdx||0)%PAL.length];
+            /* Everything is tappable: none→complete, pending→cancel,
+               done/approved→uncheck (completeChore reverses the money). */
+            const canTap=true;
+            return(
+              <div key={key} className={`ccard${isDone?" done":status==="pending"?" pend":isOpt?" opt":""}`}
+                onClick={()=>canTap&&completeChore(c.id,aId,isParentActor||!!parById(aId),selDate)}>
+                <div className={`cchk${isDone?" done":status==="pending"?" pend":isOpt?" opt":""}`}>
+                  {isDone&&<span style={{color:"#fff",fontWeight:900,fontSize:12}}>✓</span>}
+                  {status==="pending"&&<span style={{fontSize:10}}>⏳</span>}
+                  {isOpt&&!isDone&&<span style={{color:"var(--pr)",fontSize:10}}>…</span>}
                 </div>
-                <div className="pbar"><div className="pbar-f" style={{width:`${bPct}%`,background:bPct>=100?"var(--gr)":pal2.a}}/></div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div className="ctitle" style={{textDecoration:isDone?"line-through":""}}>{c.title}</div>
+                  {!actorId&&<div style={{fontSize:11,color:pal.a,marginTop:1}}>{actor.name}</div>}
+                </div>
+                <span className={`cdiff d${c.diff?.[0]||"e"}`}>{c.diff||"easy"}</span>
+                {!parById(aId)&&<span className="cprice">{c$(c.priceCents||25)}</span>}
+                <div style={{display:"flex",gap:4,flexShrink:0}} onClick={e=>e.stopPropagation()}>
+                  {isParent&&(
+                    <button className="btn bg bxs" onClick={()=>setChoreModal({mode:"edit",data:{...c}})}>✏️</button>
+                  )}
+                  {isParent&&isDone&&(
+                    <button className="btn bam bxs" onClick={()=>setEditCompModal({dk:selDate,choreId:c.id,actorId:aId,comp})}>📝</button>
+                  )}
+                </div>
+              </div>
+            );
+          });
+        })
+      )}
+      {actorId&&isToday&&myClaimedPool(actorId).length>0&&(
+        <div className="card" style={{marginTop:14,borderColor:"#A5F3FC"}}>
+          <div className="ch" style={{color:"var(--bl)"}}>🧺 From the pool ({myClaimedPool(actorId).length}/5)</div>
+          {myClaimedPool(actorId).map(p=>(
+            <div key={p.id} className="ccard" onClick={()=>completePool(p.id,actorId,!!parById(actorId))}>
+              <div className="cchk"><span style={{fontSize:10}}>⚡</span></div>
+              <div style={{flex:1,minWidth:0}}>
+                <div className="ctitle">{p.title}</div>
+                <div style={{fontSize:11,color:"var(--tx2)"}}>{p.area?`${p.area} · `:""}tap when done</div>
+              </div>
+              {p.flashBonusCents&&p.flashExpiresAt>Date.now()?<span className="cdiff" style={{background:"#FEF3C7",color:"#B45309"}}>⚡+{c$(p.flashBonusCents)}</span>:null}
+              <span className="cprice">{parById(actorId)?"log only":c$(p.priceCents||25)}</span>
+              <div onClick={e=>e.stopPropagation()}>
+                <button className="btn bg bxs" onClick={()=>unclaimPool(p.id)}>↩︎</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+function PoolView({actorId,isParentActor=false,showManage=false}){
+  const{chores,claimPool,combos,completePool,kidById,myClaimedPool,parById,pool,removePoolChore,seedCleaningPool,setComboModal,setPoolAddModal,setPoolEditModal,unclaimPool,uncompletePool}=useA();
+  const comboFor=(pid)=>combos.find(cb=>cb&&cb.active!==false&&(cb.chorePoolIds||[]).includes(pid));
+  const FlashPill=({c})=>c.flashBonusCents&&c.flashExpiresAt>Date.now()?<span className="cdiff" style={{background:"#FEF3C7",color:"#B45309"}}>⚡+{c$(c.flashBonusCents)}</span>:null;
+  const myClaimed=myClaimedPool(actorId);
+  const available=pool.filter(p=>!p.claimedBy&&isPoolDue(p));
+  const resting=pool.filter(p=>!p.claimedBy&&p.recurring&&!isPoolDue(p));
+  const done=pool.filter(p=>!p.recurring&&p.completedBy&&p.completedAt&&new Date(p.completedAt).toLocaleDateString("en-CA")===ld()&&(showManage||p.completedBy===actorId));
+  const FreqPill=({c})=>c&&c.freq?<span className="cdiff" style={{background:"#EEF2FF",color:"#4338CA"}}>{FREQ_LBL[c.freq]||c.freq}</span>:<span className={`cdiff d${c.diff?.[0]||"e"}`}>{c.diff||"easy"}</span>;
+  return(
+    <div>
+      {myClaimed.length>0&&(
+        <div className="card" style={{marginBottom:12,borderColor:"#A5F3FC",background:"var(--bll)"}}>
+          <div className="ch" style={{color:"var(--bl)"}}>🔵 Your claimed chores ({myClaimed.length}/5)</div>
+          {myClaimed.map(mc=>(
+            <div key={mc.id} className="ccard" style={{background:"#fff"}}
+              onClick={()=>completePool(mc.id,actorId,isParentActor)}>
+              <div className="cchk"><span style={{fontSize:10}}>⚡</span></div>
+              <div style={{flex:1,minWidth:0}}>
+                <div className="ctitle">{mc.title}</div>
+                <div style={{fontSize:11,color:"var(--tx2)"}}>{mc.area?`${mc.area} · `:""}tap when done</div>
+              </div>
+              <FlashPill c={mc}/>
+              <span className="cprice">{!isParentActor?c$(mc.priceCents||25):"log only"}</span>
+              <div onClick={e=>e.stopPropagation()}>
+                <button className="btn bg bxs" onClick={()=>unclaimPool(mc.id)}>↩︎</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {combos.filter(cb=>cb&&cb.active!==false).length>0&&(
+        <div className="card" style={{marginBottom:12,borderColor:"#DDD6FE"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+            <div className="ch" style={{marginBottom:0,color:"#7C3AED"}}>🧩 Combo bonuses</div>
+            {showManage&&<button className="btn bg bsm" onClick={()=>setComboModal({})}>+ New combo</button>}
+          </div>
+          {combos.filter(cb=>cb&&cb.active!==false).map(cb=>{
+            const ids=cb.chorePoolIds||[];
+            const doneToday=ids.filter(pid=>{const p2=pool.find(x=>x.id===pid);return p2&&p2.completedAt&&new Date(p2.completedAt).toLocaleDateString("en-CA")===ld();}).length;
+            const paidToday=cb.lastPaid?.date===ld();
+            return(<div key={cb.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0",borderBottom:"1px solid var(--bdr)"}}>
+              <span style={{flex:1,fontSize:13}}><strong>{cb.title}</strong> — {doneToday}/{ids.length} today{paidToday?" · paid ✓":""}</span>
+              <span className="cprice">+{c$(cb.bonusCents||0)}</span>
+              {showManage&&<button className="btn bg bxs" onClick={()=>setComboModal(cb)}>✏️</button>}
+            </div>);
+          })}
+          <div style={{fontSize:10,color:"var(--tx3)",marginTop:6}}>Bonus pays when every chore in the combo is done the same day by the same person.</div>
+        </div>
+      )}
+      {showManage&&combos.filter(cb=>cb&&cb.active!==false).length===0&&(
+        <div style={{marginBottom:12,textAlign:"right"}}><button className="btn bg bsm" onClick={()=>setComboModal({})}>🧩 New combo bonus</button></div>
+      )}
+      <div className="card" style={{marginBottom:12}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+          <div className="ch" style={{marginBottom:0}}>🎯 Available to grab</div>
+          {showManage&&<div style={{display:"flex",gap:6}}>
+            <button className="btn bg bsm" onClick={()=>seedCleaningPool()}>🧹 Add cleaning set</button>
+            <button className="btn bbl bsm" onClick={()=>setPoolAddModal(true)}>+ Add</button>
+          </div>}
+        </div>
+        {available.length===0?<div style={{color:"var(--tx3)",fontSize:13}}>No pool chores due right now.</div>:(
+          available.map(p=>(
+            <div key={p.id} className="ccard">
+              <div className="cchk"/>
+              <div style={{flex:1}}>
+                <div className="ctitle">{p.title}</div>
+                {(p.area||p.note)&&<div style={{fontSize:11,color:"var(--tx2)"}}>{p.area?p.area:""}{p.area&&p.note?" · ":""}{p.note||""}</div>}
+              </div>
+              {comboFor(p.id)&&<span className="cdiff" style={{background:"#F3E8FF",color:"#7C3AED"}}>🧩</span>}
+              <FlashPill c={p}/>
+              <FreqPill c={p}/>
+              <span className="cprice">{c$(p.priceCents||25)}</span>
+              <div onClick={e=>e.stopPropagation()} style={{display:"flex",gap:4}}>
+                {actorId&&myClaimed.length<5&&<button className="btn bbl bsm" onClick={()=>claimPool(p.id,actorId)}>Claim</button>}
+                {showManage&&<button className="btn bg bxs" onClick={()=>setPoolEditModal(p)}>✏️</button>}
+                {showManage&&<button className="btn bco bxs" onClick={()=>removePoolChore(p.id)}>🗑</button>}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+      {resting.length>0&&(
+        <div className="card" style={{marginBottom:12}}>
+          <div className="ch">😴 Scheduled (resting)</div>
+          {resting.map(p=>{
+            const by=(kidById(p.completedBy)||parById(p.completedBy))?.name;
+            const canUndo=(showManage||p.completedBy===actorId)&&p.completedBy;
+            return(
+            <div key={p.id} className="ccard">
+              <div className="cchk"/>
+              <div style={{flex:1}}>
+                <div className="ctitle">{p.title}</div>
+                <div style={{fontSize:11,color:"var(--tx2)"}}>{p.area?p.area+" · ":""}{by?`done by ${by} · `:""}{dueLabel(p)}</div>
+              </div>
+              <FreqPill c={p}/>
+              <span className="cprice">{c$(p.priceCents||25)}</span>
+              <div onClick={e=>e.stopPropagation()} style={{display:"flex",gap:4}}>
+                {canUndo&&<button className="btn bg bxs" onClick={()=>uncompletePool(p.id)}>↩︎ Undo</button>}
+                {showManage&&<button className="btn bg bxs" onClick={()=>setPoolEditModal(p)}>✏️</button>}
+                {showManage&&<button className="btn bco bxs" onClick={()=>removePoolChore(p.id)}>🗑</button>}
+              </div>
+            </div>
+          );})}
+        </div>
+      )}
+      {done.length>0&&(
+        <div className="card">
+          <div className="ch">✅ Completed today</div>
+          {done.map(p=>{
+            const by=(kidById(p.completedBy)||parById(p.completedBy))?.name;
+            const canUndo=showManage||p.completedBy===actorId;
+            return(<div key={p.id} className="ccard done">
+            <div className="cchk done"><span style={{color:"#fff",fontWeight:900,fontSize:12}}>✓</span></div>
+            <div style={{flex:1}}><div className="ctitle">{p.title}</div>{by&&<div style={{fontSize:11,color:"var(--tx2)"}}>by {by}</div>}</div>
+            <span className="cprice">{c$(p.priceCents||25)}</span>
+            {canUndo&&<button className="btn bg bxs" onClick={()=>uncompletePool(p.id)}>↩︎ Undo</button>}
+          </div>);})}
+        </div>
+      )}
+    </div>
+  );
+}
+function DashboardView(){
+  const{billPay,billProgress,bills,chores,enterKid,kids,monthEarned,parentContrib,parentMode,parents,pendCount,remainingAssignedCents,setBonusModal,setNoteModal,setView,sumKids,weekEarned,ready}=useA();
+  const curWk=wk(ld());
+  return(
+    <div>
+      {pendCount>0&&parentMode&&(
+        <div style={{background:"var(--aml)",border:"1px solid #FCD34D",borderRadius:10,padding:"10px 14px",marginBottom:14,display:"flex",alignItems:"center",justifyContent:"space-between",fontSize:13}}>
+          <span style={{fontWeight:700,color:"var(--am)"}}>⏳ {pendCount} chore{pendCount!==1?"s":""} awaiting approval</span>
+          <button className="btn bg bsm" onClick={()=>setView("chores")}>Review →</button>
+        </div>
+      )}
+      <div className="dgrid">
+        {kids.map(k=>{
+          const pal=PAL[k.colorIdx%PAL.length];
+          const bal=k.balanceCents||0;
+          const goal=k.goal?.weeklyTargetCents||300;
+          const earned=weekEarned(k.id,curWk);
+          const gpct=Math.min(100,Math.round((earned/goal)*100));
+          const sk=sumKids[k.id];
+          const kidBills=bills.filter(b=>b.kidId===k.id&&b.active);
+          const totalBills=kidBills.reduce((a,b)=>a+(b.amountCents||0)+(b.carryoverCents||0),0);
+          /* Monthly bill tracker: fills as the kid's balance covers this month's
+             bill; once the bill is actually paid (billPay this month) it flips to
+             a savings bar. Resets to tracking at the start of each month. */
+          const paidThisMonth=billProgress(k.id);
+          const billPaid=totalBills>0&&paidThisMonth>=totalBills;
+          const savingMode=totalBills===0||billPaid;
+          const billPct=totalBills>0?Math.min(100,Math.round((bal/totalBills)*100)):0;
+          const billReady=totalBills>0&&bal>=totalBills;
+          const moName=new Date().toLocaleDateString("en-US",{month:"short"});
+          /* Month-end projection: net earned so far + all remaining assigned chores */
+          const mEarned=monthEarned(k.id,mk(ld()));
+          const mRemaining=remainingAssignedCents(k.id);
+          const mProjected=mEarned+mRemaining;
+          const mPct=mProjected>0?Math.min(100,Math.round((Math.max(0,mEarned)/mProjected)*100)):0;
+          return(
+            <div key={k.id} className="kcard" style={{background:"var(--sur)",border:"1px solid var(--bdr)",borderRadius:14,padding:16,cursor:"pointer",transition:"box-shadow .15s"}}
+              onMouseEnter={e=>e.currentTarget.style.boxShadow="0 4px 12px rgba(0,0,0,.08)"}
+              onMouseLeave={e=>e.currentTarget.style.boxShadow=""}
+              onClick={()=>enterKid(k.id)}
+              onContextMenu={e=>{e.preventDefault();if(parentMode)setBonusModal({kidId:k.id,kidName:k.name});}}>
+              <div style={{display:"flex",alignItems:"center",gap:11,marginBottom:11}}>
+                <Av initials={k.initials} colorIdx={k.colorIdx} size={42}/>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:15,fontWeight:800}}>{k.name}</div>
+                  <div style={{fontSize:11,color:"var(--tx2)"}}>Age {k.age}</div>
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontSize:17,fontWeight:900,color:"var(--gr)"}}>{c$(bal)}</div>
+                  <div style={{fontSize:10,color:"var(--tx3)"}}>balance</div>
+                </div>
+              </div>
+              <div style={{marginBottom:8}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"var(--tx2)",marginBottom:3}}>
+                  <span>Weekly {c$(earned)} / {c$(goal)}</span>
+                  <span style={{color:gpct>=100?"var(--gr)":"var(--tx2)",fontWeight:gpct>=100?800:400}}>{gpct}%{gpct>=100?" 🎯":""}</span>
+                </div>
+                <div className="pbar"><div className="pbar-f" style={{width:`${gpct}%`,background:gpct>=100?"var(--gr)":pal.a}}/></div>
+              </div>
+              {parentMode&&(
+                <div style={{marginBottom:8}}>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"var(--tx2)",marginBottom:3}}>
+                    <span>📈 {moName} {c$(mEarned)} → <strong style={{color:"var(--pr)"}}>{c$(mProjected)}</strong> projected</span>
+                    <span title={`${c$(mRemaining)} of assigned chores left this month`}>{c$(mRemaining)} left</span>
+                  </div>
+                  <div className="pbar"><div className="pbar-f" style={{width:`${mPct}%`,background:"var(--pr)"}}/></div>
+                </div>
+              )}
+              <div style={{marginBottom:8}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"var(--tx2)",marginBottom:3}}>
+                  {savingMode
+                    ? <><span>{billPaid?`✓ ${moName} bill paid · Saving`:"Saving"} {c$(bal)}</span><span style={{color:"var(--gr)",fontWeight:700}}>🐷</span></>
+                    : <><span>{moName} bill {c$(bal)} / {c$(totalBills)}</span><span style={{color:billReady?"var(--gr)":"var(--am)",fontWeight:700}}>{billReady?"ready ✓":`${billPct}%`}</span></>}
+                </div>
+                <div className="pbar"><div className="pbar-f" style={{width:savingMode?"100%":`${billPct}%`,background:savingMode||billReady?"var(--gr)":"var(--am)"}}/></div>
+              </div>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                {sk&&(sk.totalSessionsCompleted||0)>0&&<span className="chip">☀️ {sk.totalSessionsCompleted} sessions</span>}
+                {parentMode&&<button className="btn bte bxs" style={{marginLeft:"auto"}} onClick={e=>{e.stopPropagation();setBonusModal({kidId:k.id,kidName:k.name});}}>🌟</button>}
+                {parentMode&&<button className="btn bbl bxs" onClick={e=>{e.stopPropagation();setNoteModal({kidId:k.id,kidName:k.name});}}>📝</button>}
+              </div>
+              {k.latestNote&&<div style={{fontSize:11,color:"var(--pr)",fontStyle:"italic",marginTop:6,padding:"5px 8px",background:"var(--prl)",borderRadius:6}}>📝 {k.latestNote}</div>}
+            </div>
+          );
+        })}
+      </div>
+      {/* Parent contributions */}
+      <div style={{marginTop:14}}>
+        <div className="card">
+          <div className="ch" style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span>👨‍👩‍👧‍👦 Parent contributions this week</span>
+            {parentMode&&<span style={{color:"var(--gr)",fontWeight:800}}>{c$(parents.reduce((a,p)=>a+parentContrib(p.id,curWk,true).cents,0))} saved</span>}
+          </div>
+          <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+            {parents.map(p=>{
+              const {cents,tasks}=parentContrib(p.id,curWk,true);
+              return(
+                <div key={p.id} style={{display:"flex",alignItems:"center",gap:8,flex:1,minWidth:160}}>
+                  <Av initials={p.initials} colorIdx={p.colorIdx} size={32}/>
+                  <div>
+                    <div style={{fontSize:13,fontWeight:700}}>{p.name}</div>
+                    <div style={{fontSize:12,color:"var(--tx2)"}}>{tasks} task{tasks!==1?"s":""} this week{parentMode&&cents>0?` · ${c$(cents)} saved`:""}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+function SummaryView(){
+  const{EARN_TYPES,kids,parentContrib,parentLog,parentMode,parents,setEditCompModal,txLog}=useA();
+  const[period,setPeriod]=useState("week");
+  const[selWk,setSelWk]=useState(wk(ld()));
+  const[selMk,setSelMk]=useState(mk(ld()));
+  const allWks=Array.from(new Set(txLog.map(tx=>wk(new Date(tx.ts).toLocaleDateString("en-CA"))))).sort().reverse();
+  const allMks=Array.from(new Set(txLog.map(tx=>mk(new Date(tx.ts).toLocaleDateString("en-CA"))))).sort().reverse();
+  const filterTx=tx=>{
+    const txDate=new Date(tx.ts).toLocaleDateString("en-CA");
+    return period==="week"?wk(txDate)===selWk:mk(txDate)===selMk;
+  };
+  const periodTx=txLog.filter(filterTx);
+  return(
+    <div>
+      <div style={{display:"flex",gap:6,marginBottom:14,alignItems:"center",flexWrap:"wrap"}} className="no-print">
+        <button className={`btn bsm ${period==="week"?"bp":"bg"}`} onClick={()=>setPeriod("week")}>Week</button>
+        <button className={`btn bsm ${period==="month"?"bp":"bg"}`} onClick={()=>setPeriod("month")}>Month</button>
+        {period==="week"&&<select className="fi" style={{width:"auto",padding:"5px 10px",fontSize:12}} value={selWk} onChange={e=>setSelWk(e.target.value)}>
+          {allWks.length?allWks.map(w=><option key={w} value={w}>{w}</option>):<option value={selWk}>{selWk}</option>}
+        </select>}
+        {period==="month"&&<select className="fi" style={{width:"auto",padding:"5px 10px",fontSize:12}} value={selMk} onChange={e=>setSelMk(e.target.value)}>
+          {allMks.length?allMks.map(m=><option key={m} value={m}>{m}</option>):<option value={selMk}>{selMk}</option>}
+        </select>}
+        <button className="btn bg bsm" onClick={()=>window.print()}>🖨️</button>
+      </div>
+      <div className="dgrid" style={{marginBottom:14}}>
+        {kids.map(k=>{
+          const kTx=periodTx.filter(tx=>tx.actorId===k.id&&EARN_TYPES.has(tx.type));
+          const gross=kTx.filter(tx=>tx.cents>0).reduce((a,tx)=>a+(tx.cents||0),0);
+          const adj=kTx.filter(tx=>tx.cents<0).reduce((a,tx)=>a+(tx.cents||0),0);
+          const total=gross+adj;
+          const pal=PAL[k.colorIdx%PAL.length];
+          return(
+            <div key={k.id} style={{background:"var(--sur)",border:"1px solid var(--bdr)",borderRadius:12,overflow:"hidden"}}>
+              <div style={{padding:"10px 14px",background:pal.l,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <Av initials={k.initials} colorIdx={k.colorIdx} size={28}/>
+                  <strong style={{color:pal.t}}>{k.name}</strong>
+                </div>
+                <span style={{fontSize:16,fontWeight:900,color:pal.a}}>{c$(total)}</span>
+              </div>
+              <div style={{padding:"8px 14px"}}>
+                {adj<0&&<div style={{fontSize:11,color:"var(--tx2)",marginBottom:6}}>Earned {c$(gross)} · adjustments {c$(adj)} · <strong>net {c$(total)}</strong></div>}
+                {kTx.length===0?<div style={{fontSize:12,color:"var(--tx3)"}}>No earnings this period.</div>:(
+                  kTx.slice(0,8).map((tx,i)=>(
+                    <div key={i} style={{display:"flex",justifyContent:"space-between",fontSize:12,padding:"4px 0",borderBottom:"1px solid var(--bdr)"}}>
+                      <span style={{color:"var(--tx2)"}}>{new Date(tx.ts).toLocaleDateString("en-US",{month:"short",day:"numeric"})}</span>
+                      <span style={{flex:1,marginLeft:8,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{tx.desc}</span>
+                      <span style={{color:tx.cents<0?"#DC2626":"var(--gr)",fontWeight:700,marginLeft:8}}>{c$(tx.cents)}</span>
+                      {parentMode&&<button className="btn bam bxs" style={{marginLeft:6}} onClick={()=>{const dk=new Date(tx.ts).toLocaleDateString("en-CA");setEditCompModal({dk,choreId:tx.desc,actorId:tx.actorId,comp:{cents:tx.cents},fromTx:tx});}}>✏️</button>}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {/* Parent log summary */}
+      <div className="card">
+        <div className="ch">Parent tasks</div>
+        {parents.map(p=>{
+          const {cents:pSaved,tasks:pCount}=parentContrib(p.id,period==="week"?selWk:selMk,period==="week");
+          const pTasks=Object.entries(parentLog).filter(([d])=>period==="week"?wk(d)===selWk:mk(d)===selMk).flatMap(([,logs])=>Object.values(logs||{}).filter(l=>l.parentId===p.id));
+          return(<div key={p.id} style={{marginBottom:10}}>
+            <div style={{fontSize:13,fontWeight:700,marginBottom:4}}>{p.name} — {pCount} task{pCount!==1?"s":""}{parentMode?` · ${c$(pSaved)} saved`:""}</div>
+            {pTasks.slice(0,5).map((t,i)=>(
+              <div key={i} style={{display:"flex",gap:8,fontSize:12,color:"var(--tx2)",padding:"3px 0"}}>
+                <span>{new Date(t.ts).toLocaleDateString("en-US",{month:"short",day:"numeric"})}</span>
+                <span>{t.desc}</span>
+              </div>
+            ))}
+          </div>);
+        })}
+      </div>
+    </div>
+  );
+}
+function BillsView({kidId=null}){
+  const{billPay,bills,kidById,parentMode,setBillModal,setPayBillModal,setSettleModal,weekEarned}=useA();
+  const filteredBills=bills.filter(b=>kidId?b.kidId===kidId:true);
+  return(
+    <div>
+      {parentMode&&!kidId&&<div style={{marginBottom:12}}><button className="btn bp bsm" onClick={()=>setBillModal({})}>+ Add Bill</button></div>}
+      <div className="rgrid">
+        {filteredBills.map(bill=>{
+          const kid=kidById(bill.kidId);
+          if(!kid)return null;
+          const bal=kid.balanceCents||0;
+          const needed=(bill.amountCents||0)+(bill.carryoverCents||0);
+          /* Progress = current balance toward the bill amount */
+          const savPct=Math.min(100,Math.round((bal/needed)*100));
+          /* Days until the 1st of next month */
+          const dueDate=nextMonthFirst();
+          const today2=new Date();
+          const daysLeft=Math.max(0,Math.ceil((dueDate-today2)/(1000*60*60*24)));
+          /* Earning pace: avg daily from this week × days left */
+          const curWkEarned=weekEarned(bill.kidId,wk(ld()));
+          const dailyRate=curWkEarned/7;
+          const projectedTotal=bal+(dailyRate*daysLeft);
+          const onPace=projectedTotal>=needed;
+          const pal=PAL[kid.colorIdx%PAL.length];
+          const monthK=mk(ld());
+          const paid=Object.values(billPay[bill.kidId]||{}).filter(p=>p.billId===bill.id&&p.monthKey===monthK).reduce((a,p)=>a+(p.amountCents||0),0);
+          return(
+            <div key={bill.id} style={{background:"var(--sur)",border:"1px solid var(--bdr)",borderLeft:`4px solid ${pal.a}`,borderRadius:12,overflow:"hidden"}}>
+              <div style={{padding:"11px 14px",borderBottom:"1px solid var(--bdr)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div>
+                  <div style={{fontSize:14,fontWeight:800}}>{bill.name}</div>
+                  <div style={{fontSize:11,color:"var(--tx2)"}}>{!kidId&&kid.name+" · "}{daysLeft} days until {nextDueLabel()}{bill.carryoverCents?` · incl. ${c$(bill.carryoverCents)} carried over`:""}</div>
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontSize:15,fontWeight:900,color:"var(--re)"}}>{c$(needed)} due</div>
+                  <span className={`pill ${onPace?"pill-gr":"pill-am"}`}>{onPace?"On pace":"Behind"}</span>
+                </div>
+              </div>
+              <div style={{padding:"10px 14px"}}>
+                {/* Balance saved toward bill */}
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"var(--tx2)",marginBottom:4}}>
+                  <span>Balance saved</span>
+                  <span style={{fontWeight:800,color:savPct>=100?"var(--gr)":"var(--tx)"}}>{c$(bal)} / {c$(needed)} ({savPct}%)</span>
+                </div>
+                <div className="pbar" style={{marginBottom:8}}>
+                  <div className="pbar-f" style={{width:`${savPct}%`,background:savPct>=100?"var(--gr)":pal.a}}/>
+                </div>
+                {/* Projected total by due date */}
+                <div style={{fontSize:11,color:"var(--tx3)",marginBottom:8}}>
+                  At current pace → projected {c$(Math.round(projectedTotal))} by {nextDueLabel()}
+                  {!onPace&&<span style={{color:"var(--re)",fontWeight:700}}> (short {c$(Math.max(0,needed-Math.round(projectedTotal)))})</span>}
+                </div>
+                {/* Manual payments made this month */}
+                {paid>0&&<div style={{fontSize:11,color:"var(--tx2)",marginBottom:8}}>Applied this month: <strong style={{color:"var(--gr)"}}>{c$(paid)}</strong></div>}
+                <div style={{display:"flex",gap:6,justifyContent:"flex-end"}}>
+                  <button className="btn bte bsm" onClick={()=>setPayBillModal({bill,kidId:bill.kidId})}>Pay bill</button>
+                  {parentMode&&<button className="btn bam bsm" onClick={()=>setSettleModal(bill)}>🧾 Settle month</button>}
+                  {parentMode&&<button className="btn bg bsm" onClick={()=>setBillModal(bill)}>Edit</button>}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {filteredBills.length===0&&<div className="empty"><div style={{fontSize:28,marginBottom:6}}>💸</div><div>No bills set up yet.</div></div>}
+    </div>
+  );
+}
+function StoreView({kidId=null}){
+  const{FB,activeKid,kidById,kids,storeItems,toast}=useA();
+  const[busy,setBusy]=useState(false);
+  const busyRef=useRef(false);
+  const kid=kidId?kidById(kidId):activeKid?kidById(activeKid):null;
+  const bal=kid?.balanceCents||0;
+  const items=[...STORE_DEF,...storeItems];
+  return(
+    <div>
+      {kid&&<div style={{fontSize:14,fontWeight:800,color:"var(--am)",marginBottom:12}}>💰 {kid.name}: {c$(bal)}</div>}
+      {!kid&&<div className="card" style={{marginBottom:12,fontSize:13,color:"var(--tx2)"}}>👆 Select a kid to make purchases.</div>}
+      <div className="sgrid">
+        {items.map(item=>{
+          const can=kid&&bal>=item.priceCents;
+          const cant=kid&&bal<item.priceCents;
+          return(<div key={item.id} className={`sitem${can?" afford":cant?" no-afford":""}`}
+            style={{background:"var(--sur)",border:"1px solid var(--bdr)",borderRadius:10,padding:14,textAlign:"center",cursor:can?"pointer":"default",transition:"all .15s"}}
+            onClick={async()=>{
+              if(!can||busy||busyRef.current)return;
+              busyRef.current=true;setBusy(true);
+              try{
+                const id=tkid(kid.id);
+                await FB.atomic({[`wh/kids/${kid.id}/balanceCents`]:inc(-item.priceCents),[`wh/txlog/${id}`]:{actorId:kid.id,type:"purchase",cents:-item.priceCents,desc:item.name,ts:Date.now()}});
+                toast(`Purchased: ${item.name}! 🎉`,"success");
+              }catch(e){toast(`Purchase failed: ${e?.message||e}`,"error");}
+              finally{busyRef.current=false;setBusy(false);}
+            }}>
+            <div style={{fontSize:28,marginBottom:6}}>{item.emoji}</div>
+            <div style={{fontSize:13,fontWeight:700,marginBottom:4}}>{item.name}</div>
+            <div style={{fontSize:12,fontWeight:800,color:"var(--am)"}}>{c$(item.priceCents)}</div>
+            {kid&&<div style={{fontSize:10,marginTop:4,color:can?"var(--gr)":"var(--re)",fontWeight:700}}>{can?"✓ Can afford":"Need more"}</div>}
+          </div>);
+        })}
+      </div>
+    </div>
+  );
+}
+function MoneyView({kidId=null}){
+  const{bills,kidById,kids,parById,txLog}=useA();
+  return(
+    <div>
+      <div className="dgrid" style={{marginBottom:14}}>
+        {kids.filter(k=>!kidId||k.id===kidId).map(k=>{
+          const pal=PAL[k.colorIdx%PAL.length];
+          const bal=k.balanceCents||0;
+          const kidBills=bills.filter(b=>b.kidId===k.id&&b.active);
+          const totalBillsCents=kidBills.reduce((a,b)=>a+(b.amountCents||0)+(b.carryoverCents||0),0);
+          /* How much of balance goes toward bill vs is free to spend */
+          const towardBill=Math.min(bal,totalBillsCents);
+          const billPct=totalBillsCents>0?Math.min(100,Math.round((bal/totalBillsCents)*100)):0;
+          const remainder=Math.max(0,bal-totalBillsCents);
+          const dueDate=nextMonthFirst();
+          const daysLeft=Math.max(0,Math.ceil((dueDate-new Date())/(1000*60*60*24)));
+          return(<div key={k.id} className="card">
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+              <Av initials={k.initials} colorIdx={k.colorIdx} size={34}/>
+              <div style={{flex:1}}>
+                <div style={{fontSize:14,fontWeight:800}}>{k.name}</div>
+                <div style={{fontSize:17,fontWeight:900,color:"var(--am)"}}>{c$(bal)}</div>
+              </div>
+              {totalBillsCents>0&&<div style={{textAlign:"right"}}>
+                <div style={{fontSize:11,color:"var(--tx3)"}}>{daysLeft}d until {nextDueLabel()}</div>
+              </div>}
+            </div>
+            {totalBillsCents>0&&(
+              <div style={{marginBottom:10}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"var(--tx2)",marginBottom:4}}>
+                  <span>Bill savings progress</span>
+                  <span style={{fontWeight:800,color:billPct>=100?"var(--gr)":pal.a}}>{c$(towardBill)} / {c$(totalBillsCents)} ({billPct}%)</span>
+                </div>
+                <div className="pbar">
+                  <div className="pbar-f" style={{width:`${billPct}%`,background:billPct>=100?"var(--gr)":pal.a}}/>
+                </div>
+                {remainder>0&&<div style={{fontSize:11,color:"var(--tx3)",marginTop:4}}>
+                  {c$(remainder)} available after bill
+                </div>}
+                {billPct>=100&&<div style={{fontSize:11,color:"var(--gr)",fontWeight:700,marginTop:4}}>
+                  🎉 Bill covered! {c$(remainder)} extra saved.
+                </div>}
+              </div>
+            )}
+            {/* Bill breakdown if multiple bills */}
+            {kidBills.length>1&&kidBills.map(bill=>{
+              const bPct=Math.min(100,Math.round((bal/bill.amountCents)*100));
+              return(<div key={bill.id} style={{display:"flex",alignItems:"center",gap:8,marginBottom:5,fontSize:12}}>
+                <span style={{flex:1,color:"var(--tx2)"}}>{bill.name}</span>
+                <div className="pbar" style={{flex:2}}><div className="pbar-f" style={{width:`${bPct}%`,background:bPct>=100?"var(--gr)":pal.a}}/></div>
+                <span style={{width:68,textAlign:"right",fontWeight:700,color:bPct>=100?"var(--gr)":"var(--tx)"}}>{c$(bill.amountCents)}</span>
               </div>);
             })}
           </div>);
-        })()}
+        })}
       </div>
-      <div className="km-tabs">{tabs.map(t=><button key={t.id} className={`km-tab${kmTab===t.id?" act":""}`} onClick={()=>setKmTab(t.id)}>{t.l}</button>)}</div>
-      <div className="km-body">
-        <ErrBound>
-          {kmTab==="tasks"&&<ChoresView actorId={actor.id} isParent={false} isParentActor={isParActor}/>}
-          {kmTab==="pool"&&<PoolView actorId={actor.id} isParentActor={isParActor} showManage={isParActor&&parentMode}/>}
-          {kmTab==="log"&&isParActor&&<div>
-            <button className="btn bp" style={{width:"100%",justifyContent:"center",padding:12,fontSize:14,fontWeight:800}} onClick={()=>setParentTaskModal({parentId:actor.id})}>+ Log a Task</button>
-            <div style={{marginTop:14}}>
-              <div className="ch">Today's logs</div>
-              {Object.values(parentLog[ld()]||{}).filter(l=>l.parentId===actor.id).map((t,i)=>(
-                <div key={i} className="alog-row"><div style={{flex:1,fontSize:13}}>{t.desc}</div><div style={{fontSize:11,color:"var(--tx3)"}}>{new Date(t.ts).toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})}</div></div>
-              ))}
+      <div className="card">
+        <div className="ch">Recent transactions</div>
+        {txLog.filter(tx=>!kidId||tx.actorId===kidId).slice(0,25).map((tx,i)=>{
+          const k=kidById(tx.actorId)||parById(tx.actorId);
+          return(<div key={i} className="alog-row">
+            <div style={{fontSize:11,color:"var(--tx3)",width:72,flexShrink:0}}>{new Date(tx.ts).toLocaleDateString("en-US",{month:"short",day:"numeric"})}</div>
+            <div style={{flex:1,fontSize:13}}><strong>{k?.name||"?"}</strong> — {tx.desc}</div>
+            {!!tx.cents&&<span className={`pill ${tx.cents>0?"pill-gr":"pill-am"}`}>{tx.cents>0?"+":""}{c$(Math.abs(tx.cents))}</span>}
+          </div>);
+        })}
+        {txLog.length===0&&<div className="empty" style={{padding:"1rem 0"}}>No transactions yet.</div>}
+      </div>
+    </div>
+  );
+}
+function SummerView({kidId=null}){
+  const{FB,backfillSessions,completeSummerSession,kidById,kids,parentMode,sumKids,sumSessions,toast,triggerSummerBonus}=useA();
+  const[tab,setTab]=useState("sessions");
+  const today=ld();
+  const dow=new Date().toLocaleDateString("en-US",{weekday:"long"});
+  const focus=SFOCUS[dow];
+  const curWk=wk(today);
+
+  const KidSumCard=({kid})=>{
+    const sk=sumKids[kid.id]||{};
+    const todayDone=Object.values(sumSessions[kid.id]||{}).some(s=>s.date===today);
+    const weekSessions=Object.values(sumSessions[kid.id]||{}).filter(s=>wk(s.date)===curWk);
+    const bonusPaid=sk.weekBonusPaidFor===curWk;
+    const pal=PAL[kid.colorIdx%PAL.length];
+    return(
+      <div className="sum-card">
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+          <div style={{display:"flex",alignItems:"center",gap:8}}><Av initials={kid.initials} colorIdx={kid.colorIdx} size={30}/><span style={{fontWeight:800,fontSize:14}}>{kid.name}</span></div>
+          <div style={{textAlign:"right"}}>
+            <div style={{fontSize:13,fontWeight:800,color:"var(--pr)"}}>{weekSessions.length}/4 this week</div>
+            {bonusPaid&&<span className="pill pill-gr">✓ $1 bonus paid</span>}
+          </div>
+        </div>
+        <div style={{display:"flex",gap:6,marginBottom:8}}>
+          {["Mon","Tue","Wed","Thu"].map((d,i)=>{
+            const dayDate=Object.keys(sumSessions[kid.id]||{}).map(k=>sumSessions[kid.id][k]).find(s=>wk(s.date)===curWk&&lp(s.date).toLocaleDateString("en-US",{weekday:"short"})===d);
+            return(<div key={d} style={{flex:1,textAlign:"center",background:dayDate?"var(--grl)":"var(--bg)",border:`1px solid ${dayDate?"#A7F3D0":"var(--bdr)"}`,borderRadius:7,padding:"4px 2px",fontSize:10,fontWeight:700,color:dayDate?"var(--gr)":"var(--tx3)"}}>
+              {d}<br/>{dayDate?"✓":"–"}
+            </div>);
+          })}
+        </div>
+        {!focus?<div style={{fontSize:12,color:"var(--tx3)"}}>🏖️ No session today</div>:
+        todayDone?<div style={{background:"var(--grl)",border:"1px solid #A7F3D0",borderRadius:8,padding:"8px 12px",fontSize:13,color:"var(--gr)",fontWeight:700}}>✅ Today's session done!</div>:(
+          <div>
+            <div style={{fontSize:12,color:"var(--tx2)",marginBottom:7}}>Today: <strong>{focus==="math"?"🔢 Math":"📖 Literacy"}</strong></div>
+            <button className="btn bp" style={{width:"100%",justifyContent:"center",padding:"11px",fontSize:14,fontWeight:800}} onClick={()=>completeSummerSession(kid.id,kid.name)}>✅ Mark Session Complete</button>
+          </div>
+        )}
+        {parentMode&&weekSessions.length>=4&&!bonusPaid&&(
+          <button className="btn bte" style={{width:"100%",justifyContent:"center",marginTop:8,fontSize:13}} onClick={()=>triggerSummerBonus(kid.id)}>
+            🎉 Award $1 weekly bonus for {kid.name}
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  return(
+    <div>
+      {sumActive()
+        ?<div style={{background:"var(--prl)",border:"1px solid #C7D2FE",borderRadius:10,padding:"8px 14px",fontSize:12,color:"var(--pr)",fontWeight:600,marginBottom:12}}>☀️ Program active · Week {sumWeeks()} of ~10 · Complete all 4 Mon–Thu sessions for a $1.00 bonus</div>
+        :<div style={{background:"var(--grl)",border:"1px solid #A7F3D0",borderRadius:10,padding:"8px 14px",fontSize:12,color:"var(--gr)",fontWeight:600,marginBottom:12}}>☀️ Summer program starts June 1, 2026</div>}
+      <div style={{display:"flex",gap:6,marginBottom:12}} className="no-print">
+        {[{id:"sessions",l:"Sessions"},{id:"reports",l:"Reports"}].map(t=>(
+          <button key={t.id} className={`btn bsm ${tab===t.id?"bp":"bg"}`} onClick={()=>setTab(t.id)}>{t.l}</button>
+        ))}
+      </div>
+      {tab==="sessions"&&(
+        <div>
+          {parentMode&&!kidId&&(
+            <div className="card" style={{marginBottom:12,background:"var(--prl)",border:"1px solid #C7D2FE"}}>
+              <div className="ch" style={{color:"var(--pr)"}}>⚡ Credit past sessions</div>
+              <p style={{fontSize:12,color:"var(--tx2)",marginBottom:10,lineHeight:1.6}}>Backfill Mon–Thu sessions for kids who completed them but weren't logged in the app yet.</p>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                {kids.map(k=>(
+                  <button key={k.id} className="btn bbl bsm" onClick={()=>backfillSessions(k.id,k.name,4)}>
+                    Credit {k.name} (4 sessions)
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>}
-          {kmTab==="summer"&&!isParActor&&<SummerView kidId={activeKid}/>}
-          {kmTab==="bills"&&!isParActor&&<BillsView kidId={activeKid}/>}
-          {kmTab==="store"&&!isParActor&&<StoreView kidId={activeKid}/>}
-          {kmTab==="money"&&!isParActor&&<MoneyView kidId={activeKid}/>}
+          )}
+          {kidId?<KidSumCard kid={kidById(kidId)}/>:kids.map(k=><KidSumCard key={k.id} kid={k}/>)}
+        </div>
+      )}
+      {tab==="reports"&&(
+        <div>
+          <button className="btn bte bsm" style={{marginBottom:12}} onClick={async()=>{
+            const curWk2=wk(ld());
+            const upd={};
+            for(const k of kids){
+              const sessions=Object.values(sumSessions[k.id]||{}).filter(s=>wk(s.date)===curWk2);
+              upd[`wh/summerProgram/reports/${k.id}/${curWk2}`]={generatedAt:Date.now(),kidName:k.name,weekKey:curWk2,sessionsCompleted:sessions.length,sessionsScheduled:4,attendanceRate:(sessions.length/4).toFixed(2),bonusPaid:sumKids[k.id]?.weekBonusPaidFor===curWk2};
+            }
+            await FB.atomic(upd);toast("Report generated ✓","success");
+          }}>⚡ Generate This Week's Report</button>
+          <div className="rgrid">
+            {kids.map((k,i)=>{
+              const curWk2=wk(ld());
+              const sessions=Object.values(sumSessions[k.id]||{}).filter(s=>wk(s.date)===curWk2);
+              const sk=sumKids[k.id]||{};
+              const bonusPaid=sk.weekBonusPaidFor===curWk2;
+              const pal=PAL[i%PAL.length];
+              return(<div key={k.id} style={{background:"var(--sur)",border:"1px solid var(--bdr)",borderLeft:`4px solid ${pal.a}`,borderRadius:12,overflow:"hidden"}}>
+                <div style={{padding:"9px 13px",background:pal.l,display:"flex",justifyContent:"space-between"}}>
+                  <strong style={{color:pal.t}}>{k.name}</strong>
+                  <span style={{fontSize:11,color:pal.t}}>{curWk2}</span>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",borderBottom:"1px solid var(--bdr)"}}>
+                  {[{v:`${sessions.length}/4`,l:"sessions"},{v:`${Math.round((sessions.length/4)*100)}%`,l:"attend."},{v:bonusPaid?"✓ $1":"–",l:"bonus"}].map((s,j)=>(
+                    <div key={j} style={{padding:"8px 6px",textAlign:"center",borderRight:j<2?"1px solid var(--bdr)":"none"}}>
+                      <div style={{fontSize:15,fontWeight:800}}>{s.v}</div>
+                      <div style={{fontSize:9,color:"var(--tx3)",textTransform:"uppercase",letterSpacing:".05em"}}>{s.l}</div>
+                    </div>
+                  ))}
+                </div>
+                {parentMode&&sessions.length>=4&&!bonusPaid&&(
+                  <div style={{padding:"8px 13px"}}><button className="btn bte bsm" style={{width:"100%",justifyContent:"center"}} onClick={()=>triggerSummerBonus(k.id)}>Award $1 bonus</button></div>
+                )}
+              </div>);
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+function WeeklyCheckinView(){
+  const{bills,comps,kids,parentLog,parents,sumKids,sumSessions,triggerSummerBonus,weekEarned}=useA();
+  const curWk=wk(ld());
+  const kidStats=kids.map(k=>{
+    const earned=weekEarned(k.id,curWk);
+    const goal=k.goal?.weeklyTargetCents||300;
+    const gpct=Math.min(100,Math.round((earned/goal)*100));
+    const completions=Object.entries(comps).filter(([d])=>wk(d)===curWk).flatMap(([,dc])=>Object.entries(dc).filter(([key])=>key.endsWith(`_${k.id}`)&&(dc[key].status==="done"||dc[key].status==="approved")));
+    const monthK=mk(ld());
+    const billsPaid=k.balanceCents||0; // current balance vs bills due
+    const totalBillsAmt=bills.filter(b=>b.kidId===k.id&&b.active).reduce((a,b)=>a+(b.amountCents||0)+(b.carryoverCents||0),0);
+    const sk=sumKids[k.id]||{};
+    const sumSess=Object.values(sumSessions[k.id]||{}).filter(s=>wk(s.date)===curWk).length;
+    return{k,earned,goal,gpct,completions:completions.length,billsPaid,totalBillsAmt,sk,sumSess};
+  });
+  return(
+    <div>
+      <div style={{background:"var(--prl)",border:"1px solid #C7D2FE",borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:13,color:"var(--pr)",fontWeight:700}}>
+        📋 Weekly check-in — {curWk}
+      </div>
+      <div className="wk-grid">
+        {kidStats.map(({k,earned,goal,gpct,completions,billsPaid,totalBillsAmt,sk,sumSess})=>{
+          const pal=PAL[k.colorIdx%PAL.length];
+          const onTrack=gpct>=75;
+          const billOnTrack=totalBillsAmt===0||billsPaid>=totalBillsAmt;
+          return(<div key={k.id} className="wk-card" style={{borderLeft:`4px solid ${pal.a}`}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+              <Av initials={k.initials} colorIdx={k.colorIdx} size={30}/>
+              <div style={{flex:1}}>
+                <div style={{fontSize:14,fontWeight:800}}>{k.name}</div>
+                <span className={`pill ${onTrack?"pill-gr":"pill-am"}`}>{onTrack?"On track":"Needs work"}</span>
+              </div>
+              <div style={{fontSize:16,fontWeight:900,color:"var(--gr)"}}>{c$(earned)}</div>
+            </div>
+            <div className="wk-stat"><span>Chores completed</span><strong>{completions}</strong></div>
+            <div className="wk-stat"><span>Weekly goal</span><strong style={{color:gpct>=100?"var(--gr)":"var(--tx)"}}>{c$(earned)} / {c$(goal)} ({gpct}%)</strong></div>
+            {totalBillsAmt>0&&<div className="wk-stat"><span>Bill progress</span><strong style={{color:billOnTrack?"var(--gr)":"var(--re)"}}>{c$(billsPaid)} / {c$(totalBillsAmt)}</strong></div>}
+            {sumActive()&&<div className="wk-stat"><span>Summer sessions</span><strong>{sumSess}/4{sumSess>=4?" 🎉":""}</strong></div>}
+            <div className="wk-stat"><span>Balance</span><strong style={{color:"var(--am)"}}>{c$(k.balanceCents||0)}</strong></div>
+            {sumActive()&&sumSess>=4&&sumKids[k.id]?.weekBonusPaidFor!==curWk&&(
+              <button className="btn bte bsm" style={{width:"100%",justifyContent:"center",marginTop:8}} onClick={()=>triggerSummerBonus(k.id)}>
+                🎉 Pay $1 summer bonus
+              </button>
+            )}
+          </div>);
+        })}
+      </div>
+      <div className="card" style={{marginTop:14}}>
+        <div className="ch">Parent contributions this week</div>
+        {parents.map(p=>{
+          const tasks=Object.entries(parentLog).filter(([d])=>wk(d)===curWk).flatMap(([,logs])=>Object.values(logs||{}).filter(l=>l.parentId===p.id));
+          return(<div key={p.id} style={{marginBottom:8}}>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:700,marginBottom:4}}><span>{p.name}</span><span style={{color:"var(--tx2)"}}>{tasks.length} tasks</span></div>
+            {tasks.slice(0,4).map((t,i)=><div key={i} style={{fontSize:12,color:"var(--tx2)",paddingLeft:8}}>{t.desc}</div>)}
+          </div>);
+        })}
+      </div>
+    </div>
+  );
+}
+function SettingsView(){
+  const{chores,hasPIN,parentMode,setParentMode,setScreen,setShowCfg,ready,online}=useA();
+  return(<div className="card">
+    {[
+      {l:"Firebase",s:ready?`🟢 Connected${!online?" · ⚠️ Offline":""}`:  "🔴 Demo mode",btn:"Configure",fn:()=>setShowCfg(true)},
+      {l:"Parent PIN",s:hasPIN?"PIN is set":"No PIN set",btn:hasPIN?"Change":"Set PIN",fn:()=>setScreen("pin-set")},
+      {l:"Parent mode",s:"Manage chores, approve, edit",custom:true},
+    ].map(r=>(
+      <div key={r.l} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"11px 0",borderBottom:"1px solid var(--bdr)"}}>
+        <div><div style={{fontWeight:700,fontSize:13}}>{r.l}</div><div style={{fontSize:11,color:"var(--tx2)",marginTop:2}}>{r.s}</div></div>
+        {r.custom?<label className="sw"><input type="checkbox" checked={parentMode} onChange={e=>setParentMode(e.target.checked)}/><div className="sw-t"/><div className="sw-th"/></label>
+          :<button className="btn bg bsm" onClick={r.fn}>{r.btn}</button>}
+      </div>
+    ))}
+  </div>);
+}
+function ChoreModalComp(){
+  const{choreModal,deleteChore,kids,parents,saveChore,selDate,setChoreModal}=useA();
+  const m=choreModal;
+  const isQuick=m?.mode==="quick";
+  const blank={title:"",diff:"easy",scheduleType:"daily",scheduleDays:[],assignedTo:[],priceCents:25,requiresApproval:false,repeating:false};
+  const[f,setF]=useState(m?.data||blank);
+  const[oneTimeOnly,setOneTimeOnly]=useState(false);
+  const tog=(arr,v)=>arr?.includes(v)?arr.filter(x=>x!==v):[...(arr||[]),v];
+  const allActors=[...kids,...parents];
+  return(<div className="overlay" onClick={()=>setChoreModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
+    <div className="modal-h">{m?.mode==="edit"?"Edit Chore":isQuick?"Quick Add Chore":"Add Chore"}</div>
+    <div className="fg"><label className="fl">Title</label><input className="fi" placeholder="Chore name" value={f.title} onChange={e=>setF(x=>({...x,title:e.target.value}))}/></div>
+    <div style={{display:"flex",gap:8}}>
+      <div className="fg" style={{flex:1}}>
+        <label className="fl">Difficulty</label>
+        <select className="fi" value={f.diff} onChange={e=>{const d=e.target.value;setF(x=>({...x,diff:d,priceCents:d==="easy"?25:d==="medium"?50:100}));}}>
+          <option value="easy">Easy — $0.25</option>
+          <option value="medium">Medium — $0.50</option>
+          <option value="hard">Hard — $1.00</option>
+        </select>
+      </div>
+      <div className="fg" style={{flex:1}}>
+        <label className="fl">Amount ($)</label>
+        <input className="fi" type="number" step="0.05" min="0" value={(f.priceCents/100).toFixed(2)} onChange={e=>setF(x=>({...x,priceCents:Math.round(parseFloat(e.target.value)*100)||25}))}/>
+      </div>
+    </div>
+    {!isQuick&&<>
+      <div className="fg"><label className="fl">Schedule</label>
+        <select className="fi" value={f.scheduleType} onChange={e=>setF(x=>({...x,scheduleType:e.target.value}))}>
+          <option value="daily">Every day</option><option value="weekly">Specific days</option>
+        </select></div>
+      {f.scheduleType==="weekly"&&<div className="fg"><label className="fl">Days</label>
+        <div className="frow">{DAYS.map(d=><button key={d} className={`btn bsm ${f.scheduleDays?.includes(d)?"bp":"bg"}`} onClick={()=>setF(x=>({...x,scheduleDays:tog(x.scheduleDays,d)}))}>{d}</button>)}</div></div>}
+    </>}
+    <div className="fg"><label className="fl">Assign to (leave empty = today only for quick add)</label>
+      <div className="frow">{allActors.map(a=><button key={a.id} className={`btn bsm ${f.assignedTo?.includes(a.id)?"bp":"bg"}`} onClick={()=>setF(x=>({...x,assignedTo:tog(x.assignedTo,a.id)}))}>{a.name}</button>)}</div></div>
+    {m?.mode==="edit"&&<div className="sw-row" style={{fontSize:13}}><span style={{fontWeight:600}}>Change for today only</span><label className="sw"><input type="checkbox" checked={oneTimeOnly} onChange={e=>setOneTimeOnly(e.target.checked)}/><div className="sw-t"/><div className="sw-th"/></label></div>}
+    <div className="sw-row" style={{fontSize:13}}><span style={{fontWeight:600}}>Requires approval</span><label className="sw"><input type="checkbox" checked={!!f.requiresApproval} onChange={e=>setF(x=>({...x,requiresApproval:e.target.checked}))}/><div className="sw-t"/><div className="sw-th"/></label></div>
+    <div className="fax">
+      {m?.data?.id&&<button className="btn bco" onClick={()=>{deleteChore(m.data.id);setChoreModal(null);}}>Delete</button>}
+      <button className="btn bg" onClick={()=>setChoreModal(null)}>Cancel</button>
+      <button className="btn bp" onClick={()=>{if(!f.title.trim())return;saveChore(f,oneTimeOnly?selDate:null);setChoreModal(null);}}>
+        {m?.mode==="edit"?"Save":"Add chore"}
+      </button>
+    </div>
+  </div></div>);
+}
+function EditCompModalComp(){
+  const{editComp,editCompModal,setEditCompModal}=useA();
+  const m=editCompModal;
+  const[cents,setCents]=useState((m?.comp?.cents||0)/100);
+  const[note,setNote]=useState("");
+  const[remove,setRemove]=useState(false);
+  if(!m)return null;
+  return(<div className="overlay" onClick={()=>setEditCompModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
+    <div className="modal-h">✏️ Edit Completion</div>
+    <div className="fg"><label className="fl">Adjusted amount ($)</label>
+      <input className="fi" type="number" step="0.05" min="0" value={cents} onChange={e=>setCents(parseFloat(e.target.value)||0)} disabled={remove}/></div>
+    <div className="fg"><label className="fl">Reason for change (required)</label>
+      <textarea className="fi" placeholder="e.g. Only half done, missed a section..." value={note} onChange={e=>setNote(e.target.value)}/></div>
+    <div className="sw-row" style={{fontSize:13}}><span style={{fontWeight:600,color:"var(--re)"}}>Remove this completion entirely</span>
+      <label className="sw"><input type="checkbox" checked={remove} onChange={e=>setRemove(e.target.checked)}/><div className="sw-t"/><div className="sw-th"/></label></div>
+    <div className="fax">
+      <button className="btn bg" onClick={()=>setEditCompModal(null)}>Cancel</button>
+      <button className="btn bp" disabled={!note.trim()} onClick={()=>editComp(m.dk,m.choreId,m.actorId,{newCents:Math.round(cents*100),remove,note,fromTx:m.fromTx})}>Save changes</button>
+    </div>
+  </div></div>);
+}
+function BillModalComp(){
+  const{FB,billModal,bills,kids,setBillModal,toast}=useA();
+  const b=billModal;
+  const[f,setF]=useState(b?.id?b:{kidId:"k1",name:"",amountCents:4500,type:"monthly",active:true});
+  return(<div className="overlay" onClick={()=>setBillModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
+    <div className="modal-h">{b?.id?"Edit Bill":"Add Bill"}</div>
+    <div className="fg"><label className="fl">Kid</label>
+      <select className="fi" value={f.kidId} onChange={e=>setF(x=>({...x,kidId:e.target.value}))}>
+        {kids.map(k=><option key={k.id} value={k.id}>{k.name}</option>)}
+      </select></div>
+    <div className="fg"><label className="fl">Bill name</label><input className="fi" placeholder="Cell phone, Soccer..." value={f.name} onChange={e=>setF(x=>({...x,name:e.target.value}))}/></div>
+    <div style={{display:"flex",gap:8}}>
+      <div className="fg" style={{flex:1}}><label className="fl">Amount ($)</label>
+        <input className="fi" type="number" step="0.01" value={(f.amountCents/100).toFixed(2)} onChange={e=>setF(x=>({...x,amountCents:Math.round(parseFloat(e.target.value)*100)||0}))}/></div>
+      <div className="fg" style={{flex:1}}><label className="fl">Type</label>
+        <select className="fi" value={f.type} onChange={e=>setF(x=>({...x,type:e.target.value}))}>
+          <option value="monthly">Monthly</option><option value="goal">One-time goal</option>
+        </select></div>
+    </div>
+    <div className="fax">
+      <button className="btn bg" onClick={()=>setBillModal(null)}>Cancel</button>
+      <button className="btn bp" onClick={async()=>{
+        if(!f.name.trim())return;
+        const id=f.id||`b${Date.now()}`;
+        await FB.write(`wh/bills/${id}`,{...f,id});
+        toast(f.id?"Bill updated":"Bill added","success");setBillModal(null);
+      }}>{b?.id?"Save":"Add bill"}</button>
+    </div>
+  </div></div>);
+}
+function PayBillModalComp(){
+  const{kidById,payBill,payBillModal,setPayBillModal}=useA();
+  const m=payBillModal;
+  const kid=kidById(m?.kidId);
+  const[amt,setAmt]=useState(m?.bill?((m.bill.amountCents)/100).toFixed(2):"");
+  if(!m||!kid)return null;
+  return(<div className="overlay" onClick={()=>setPayBillModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
+    <div className="modal-h">💸 Pay Bill: {m.bill.name}</div>
+    <p style={{fontSize:13,color:"var(--tx2)",marginBottom:14}}>
+      {kid.name}'s balance: <strong style={{color:"var(--am)"}}>{c$(kid.balanceCents||0)}</strong><br/>
+      Bill amount: <strong style={{color:"var(--re)"}}>{c$(m.bill.amountCents)}</strong>
+    </p>
+    <div className="fg"><label className="fl">Amount to pay ($)</label>
+      <input className="fi" type="number" step="0.01" value={amt} onChange={e=>setAmt(e.target.value)}/></div>
+    <div className="fax">
+      <button className="btn bg" onClick={()=>setPayBillModal(null)}>Cancel</button>
+      <button className="btn bp" onClick={()=>{const c=Math.round(parseFloat(amt)*100);if(c>0){payBill(m.bill.id,m.kidId,c);setPayBillModal(null);}}}>Pay {amt?c$(Math.round(parseFloat(amt)*100)):""}</button>
+    </div>
+  </div></div>);
+}
+function PoolAddModalComp(){
+  const{addPoolChore,pool,setPoolAddModal}=useA();
+  const[f,setF]=useState({title:"",diff:"medium",priceCents:50,note:"",repeating:true});
+  return(<div className="overlay" onClick={()=>setPoolAddModal(false)}><div className="modal" onClick={e=>e.stopPropagation()}>
+    <div className="modal-h">➕ Add Pool Chore</div>
+    <div className="fg"><label className="fl">Title</label><input className="fi" placeholder="e.g. Sweep porch" value={f.title} onChange={e=>setF(x=>({...x,title:e.target.value}))}/></div>
+    <div style={{display:"flex",gap:8}}>
+      <div className="fg" style={{flex:1}}><label className="fl">Difficulty</label>
+        <select className="fi" value={f.diff} onChange={e=>{const d=e.target.value;setF(x=>({...x,diff:d,priceCents:d==="easy"?25:d==="medium"?50:100}));}}>
+          <option value="easy">Easy — $0.25</option><option value="medium">Medium — $0.50</option><option value="hard">Hard — $1.00</option>
+        </select></div>
+      <div className="fg" style={{flex:1}}><label className="fl">Amount ($)</label>
+        <input className="fi" type="number" step="0.05" value={(f.priceCents/100).toFixed(2)} onChange={e=>setF(x=>({...x,priceCents:Math.round(parseFloat(e.target.value)*100)||25}))}/></div>
+    </div>
+    <div className="fg"><label className="fl">Note (optional)</label><input className="fi" placeholder="Any details..." value={f.note} onChange={e=>setF(x=>({...x,note:e.target.value}))}/></div>
+    <div className="sw-row" style={{fontSize:13}}><span style={{fontWeight:600}}>Repeating (resets after each completion)</span><label className="sw"><input type="checkbox" checked={f.repeating} onChange={e=>setF(x=>({...x,repeating:e.target.checked}))}/><div className="sw-t"/><div className="sw-th"/></label></div>
+    <div className="fax">
+      <button className="btn bg" onClick={()=>setPoolAddModal(false)}>Cancel</button>
+      <button className="btn bp" onClick={()=>{if(!f.title.trim())return;addPoolChore(f);setPoolAddModal(false);}}>Add to pool</button>
+    </div>
+  </div></div>);
+}
+function PoolEditModalComp(){
+  const{pool,poolEditModal,removePoolChore,setPoolEditModal,updatePoolChore}=useA();
+  const c=poolEditModal;
+  const AREAS=Array.from(new Set(pool.map(p=>p.area).filter(Boolean))).sort();
+  const flashActive=!!(c.flashBonusCents&&c.flashExpiresAt>Date.now());
+  const[f,setF]=useState({
+    title:c.title||"",
+    area:c.area||"",
+    freq:c.freq||(c.recurring?"weekly":""),
+    priceCents:c.priceCents||25,
+    note:c.note||"",
+    recurring:c.recurring!==undefined?!!c.recurring:!!c.freq,
+    flashBonusCents:c.flashBonusCents||0,
+    flashDur:flashActive?"keep":"off",
+  });
+  function save(){
+    if(!f.title.trim())return;
+    const patch={title:f.title.trim(),area:f.area.trim(),priceCents:f.priceCents,note:f.note,recurring:f.recurring};
+    if(f.recurring&&f.freq){patch.freq=f.freq;patch.intervalDays=INTERVAL_DAYS[f.freq]||7;}
+    if(f.flashDur==="off"||!f.flashBonusCents){patch.flashBonusCents=null;patch.flashExpiresAt=null;}
+    else if(f.flashDur==="keep"){patch.flashBonusCents=f.flashBonusCents;}
+    else{patch.flashBonusCents=f.flashBonusCents;patch.flashExpiresAt=f.flashDur==="today"?eodTs():Date.now()+(f.flashDur==="24h"?24:48)*3600*1000;}
+    updatePoolChore(c.id,patch);
+    setPoolEditModal(null);
+  }
+  return(<div className="overlay" onClick={()=>setPoolEditModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
+    <div className="modal-h">✏️ Edit Pool Chore</div>
+    <div className="fg"><label className="fl">Title</label><input className="fi" value={f.title} onChange={e=>setF(x=>({...x,title:e.target.value}))}/></div>
+    <div style={{display:"flex",gap:8}}>
+      <div className="fg" style={{flex:1}}><label className="fl">Frequency</label>
+        <select className="fi" value={f.recurring?f.freq:"none"} onChange={e=>{const v=e.target.value;if(v==="none")setF(x=>({...x,recurring:false}));else setF(x=>({...x,recurring:true,freq:v}));}}>
+          <option value="none">One-time / on demand</option>
+          {FREQ_OPTS.map(o=><option key={o} value={o}>{FREQ_LBL[o]}</option>)}
+        </select></div>
+      <div className="fg" style={{flex:1}}><label className="fl">Amount ($)</label>
+        <input className="fi" type="number" step="0.05" min="0" value={(f.priceCents/100).toFixed(2)} onChange={e=>setF(x=>({...x,priceCents:Math.round(parseFloat(e.target.value)*100)||25}))}/></div>
+    </div>
+    {f.recurring&&f.freq&&<div style={{fontSize:11,color:"var(--tx2)",marginTop:-4,marginBottom:8}}>Resets every {INTERVAL_DAYS[f.freq]} day(s) after it's completed.</div>}
+    <div className="fg"><label className="fl">Room / area</label>
+      <input className="fi" list="poolAreas" placeholder="e.g. Kitchen" value={f.area} onChange={e=>setF(x=>({...x,area:e.target.value}))}/>
+      <datalist id="poolAreas">{AREAS.map(a=><option key={a} value={a}/>)}</datalist>
+    </div>
+    <div className="fg"><label className="fl">Note (optional)</label><input className="fi" value={f.note} onChange={e=>setF(x=>({...x,note:e.target.value}))}/></div>
+    <div style={{display:"flex",gap:8}}>
+      <div className="fg" style={{flex:1}}><label className="fl">⚡ Flash bonus ($)</label>
+        <input className="fi" type="number" step="0.25" min="0" value={(f.flashBonusCents/100)} onChange={e=>setF(x=>({...x,flashBonusCents:Math.round((parseFloat(e.target.value)||0)*100)}))}/></div>
+      <div className="fg" style={{flex:1}}><label className="fl">Bonus window</label>
+        <select className="fi" value={f.flashDur} onChange={e=>setF(x=>({...x,flashDur:e.target.value}))}>
+          <option value="off">No flash bonus</option>
+          {flashActive&&<option value="keep">Keep current ({new Date(c.flashExpiresAt).toLocaleDateString("en-US",{month:"short",day:"numeric"})})</option>}
+          <option value="today">Today until midnight</option>
+          <option value="24h">Next 24 hours</option>
+          <option value="48h">Next 48 hours</option>
+        </select></div>
+    </div>
+    {f.flashBonusCents>0&&f.flashDur!=="off"&&<div style={{fontSize:11,color:"#B45309",marginTop:-4,marginBottom:8}}>Whoever completes this before the deadline earns +{c$(f.flashBonusCents)} extra.</div>}
+    <div className="fax">
+      <button className="btn bco" onClick={()=>{removePoolChore(c.id);setPoolEditModal(null);}}>Delete</button>
+      <button className="btn bg" onClick={()=>setPoolEditModal(null)}>Cancel</button>
+      <button className="btn bp" onClick={save}>Save</button>
+    </div>
+  </div></div>);
+}
+function ParentTaskModalComp(){
+  const{logParentTask,parentTaskModal,parents,setParentTaskModal}=useA();
+  const[desc,setDesc]=useState("");
+  const[who,setWho]=useState(parentTaskModal?.parentId||parents[0]?.id);
+  return(<div className="overlay" onClick={()=>setParentTaskModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
+    <div className="modal-h">✅ Log Parent Task</div>
+    <div className="fg"><label className="fl">Who did it?</label>
+      <div className="frow">{parents.map(p=><button key={p.id} className={`btn bsm ${who===p.id?"bp":"bg"}`} onClick={()=>setWho(p.id)}>{p.name}</button>)}</div></div>
+    <div className="fg"><label className="fl">What did you do?</label><input className="fi" placeholder="e.g. Cleaned bathroom, mowed lawn..." value={desc} onChange={e=>setDesc(e.target.value)}/></div>
+    <div className="fax">
+      <button className="btn bg" onClick={()=>setParentTaskModal(null)}>Cancel</button>
+      <button className="btn bp" onClick={()=>{if(!desc.trim())return;logParentTask(who,desc);setParentTaskModal(null);}}>Log task</button>
+    </div>
+  </div></div>);
+}
+function NoteModal(){
+  const{kidById,noteModal,saveNote,setNoteModal}=useA();
+  const m=noteModal;
+  const kid=m?kidById(m.kidId):null;
+  const[note,setNote]=useState(kid?.latestNote||"");
+  if(!m||!kid)return null;
+  return(<div className="overlay" onClick={()=>setNoteModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
+    <div className="modal-h">📝 Note for {m.kidName}</div>
+    <p style={{fontSize:12,color:"var(--tx2)",marginBottom:12,lineHeight:1.6}}>This note appears on {m.kidName}'s dashboard card so they see it when you open the app together.</p>
+    <div className="fg"><label className="fl">Message</label>
+      <textarea className="fi" rows={3} placeholder="Great job this week! Keep it up..." value={note} onChange={e=>setNote(e.target.value)}/></div>
+    <div className="fax">
+      <button className="btn bg" onClick={()=>{saveNote(m.kidId,"");setNoteModal(null);}}>Clear note</button>
+      <button className="btn bg" onClick={()=>setNoteModal(null)}>Cancel</button>
+      <button className="btn bp" onClick={()=>{saveNote(m.kidId,note);setNoteModal(null);}}>Save note</button>
+    </div>
+  </div></div>);
+}
+function FocusTimer(){
+  const{awardXp,kids,setShowTimer}=useA();
+  const D=25*60;
+  const[s,setS]=useState(D);const[run,setRun]=useState(false);const[done,setDone]=useState(false);const[sk,setSk]=useState(kids[0]?.id||"");
+  const t=useRef(null);
+  const start=()=>{setRun(true);t.current=setInterval(()=>setS(x=>{if(x<=1){clearInterval(t.current);setRun(false);setDone(true);return 0;}return x-1;}),1000);};
+  const pause=()=>{clearInterval(t.current);setRun(false);};
+  const reset=()=>{clearInterval(t.current);setRun(false);setDone(false);setS(D);};
+  useEffect(()=>()=>clearInterval(t.current),[]);
+  const pct=(s/D)*100,r=56,c=2*Math.PI*r;
+  const mm=String(Math.floor(s/60)).padStart(2,"0"),ss=String(s%60).padStart(2,"0");
+  return(<div className="overlay"><div className="modal" style={{textAlign:"center"}}>
+    <div style={{fontSize:15,fontWeight:800,marginBottom:14}}>⏱ Focus Timer</div>
+    <div style={{width:140,height:140,margin:"0 auto 14px",position:"relative"}}>
+      <svg style={{transform:"rotate(-90deg)"}} width="140" height="140" viewBox="0 0 140 140">
+        <circle cx="70" cy="70" r={r} fill="none" stroke="var(--bg)" strokeWidth="8"/>
+        <circle cx="70" cy="70" r={r} fill="none" stroke="var(--pr)" strokeWidth="8"
+          strokeDasharray={c} strokeDashoffset={c*(1-pct/100)} strokeLinecap="round"/>
+      </svg>
+      <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:30,fontWeight:900}}>{mm}:{ss}</div>
+    </div>
+    {done?(<div style={{marginBottom:14}}>
+      <div style={{color:"var(--gr)",fontWeight:800,marginBottom:10}}>🎉 Done! Award bonus?</div>
+      <select className="fi" value={sk} onChange={e=>setSk(e.target.value)}><option value="">No bonus</option>{kids.map(k=><option key={k.id} value={k.id}>{k.name}</option>)}</select>
+    </div>):(
+      <div style={{display:"flex",gap:8,justifyContent:"center",marginBottom:14}}>
+        {!run?<button className="btn bp" onClick={start}>▶ Start</button>:<button className="btn bg" onClick={pause}>⏸ Pause</button>}
+        <button className="btn bg" onClick={reset}>↺</button>
+      </div>
+    )}
+    <div style={{display:"flex",gap:8,justifyContent:"center"}}>
+      {done&&sk&&<button className="btn bte" onClick={()=>{awardXp(sk,50);setShowTimer(false);}}>+$0.50 & Close</button>}
+      <button className="btn bg" onClick={()=>setShowTimer(false)}>Close</button>
+    </div>
+  </div></div>);
+}
+function KidModeApp(){
+  const{activeKid,activeParent,bills,exitToPicker,kidById,parById,parentLog,parentMode,pool,setParentTaskModal,ready,online}=useA();
+  const isParActor=!!activeParent;
+  const actor=isParActor?parById(activeParent):kidById(activeKid);
+  const[kmTab,setKmTab]=useState("tasks");
+  if(!actor)return null;
+  const pal=PAL[(actor.colorIdx||0)%PAL.length];
+  const bal=!isParActor?c$(kidById(activeKid)?.balanceCents||0):"";
+  const tabs=isParActor
+    ?[{id:"tasks",l:"✓ Tasks"},{id:"pool",l:"🎯 Pool"},{id:"log",l:"📝 Log Task"}]
+    :[{id:"tasks",l:"✓ Tasks"},{id:"pool",l:"🎯 Pool"},{id:"summer",l:"☀️ Summer"},{id:"bills",l:"💸 Bills"},{id:"store",l:"🛍 Store"},{id:"money",l:"💰 Money"}];
+  return(<div className="km-wrap">
+    {!online&&ready&&<div className="offline-bar">⚠️ Offline</div>}
+    <div className="km-hdr" style={{flexDirection:"column",alignItems:"stretch",gap:8}}>
+      <div style={{display:"flex",alignItems:"center",gap:11}}>
+        <Av initials={actor.initials} colorIdx={actor.colorIdx||0} size={38}/>
+        <div style={{flex:1}}>
+          <div style={{fontSize:16,fontWeight:900}}>{actor.name}</div>
+          {!isParActor&&<div style={{fontSize:12,fontWeight:800,color:"var(--am)"}}>{bal}</div>}
+        </div>
+        <button className="btn bg bsm" onClick={exitToPicker}>← Home</button>
+      </div>
+      {!isParActor&&(()=>{
+        const kid2=kidById(activeKid);
+        const kidBills2=bills.filter(b=>b.kidId===activeKid&&b.active);
+        const totalBills2=kidBills2.reduce((a,b)=>a+(b.amountCents||0)+(b.carryoverCents||0),0);
+        const bal2=kid2?.balanceCents||0;
+        const dueDate2=nextMonthFirst();
+        const daysLeft2=Math.max(0,Math.ceil((dueDate2-new Date())/(1000*60*60*24)));
+        const pal2=PAL[(kid2?.colorIdx||0)%PAL.length];
+        if(!totalBills2)return null;
+        const billPct2=Math.min(100,Math.round((bal2/totalBills2)*100));
+        return(<div style={{paddingTop:4}}>
+          {kidBills2.map(bill=>{
+            const bPct=Math.min(100,Math.round((bal2/bill.amountCents)*100));
+            return(<div key={bill.id} style={{marginBottom:5}}>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}>
+                <span style={{color:"var(--tx2)",fontWeight:600}}>{bill.name}</span>
+                <span style={{fontWeight:800,color:bPct>=100?"var(--gr)":pal2.a}}>{c$(bal2)} / {c$(bill.amountCents)} · {daysLeft2}d left</span>
+              </div>
+              <div className="pbar"><div className="pbar-f" style={{width:`${bPct}%`,background:bPct>=100?"var(--gr)":pal2.a}}/></div>
+            </div>);
+          })}
+        </div>);
+      })()}
+    </div>
+    <div className="km-tabs">{tabs.map(t=><button key={t.id} className={`km-tab${kmTab===t.id?" act":""}`} onClick={()=>setKmTab(t.id)}>{t.l}</button>)}</div>
+    <div className="km-body">
+      <ErrBound>
+        {kmTab==="tasks"&&<ChoresView actorId={actor.id} isParent={false} isParentActor={isParActor}/>}
+        {kmTab==="pool"&&<PoolView actorId={actor.id} isParentActor={isParActor} showManage={isParActor&&parentMode}/>}
+        {kmTab==="log"&&isParActor&&<div>
+          <button className="btn bp" style={{width:"100%",justifyContent:"center",padding:12,fontSize:14,fontWeight:800}} onClick={()=>setParentTaskModal({parentId:actor.id})}>+ Log a Task</button>
+          <div style={{marginTop:14}}>
+            <div className="ch">Today's logs</div>
+            {Object.values(parentLog[ld()]||{}).filter(l=>l.parentId===actor.id).map((t,i)=>(
+              <div key={i} className="alog-row"><div style={{flex:1,fontSize:13}}>{t.desc}</div><div style={{fontSize:11,color:"var(--tx3)"}}>{new Date(t.ts).toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})}</div></div>
+            ))}
+          </div>
+        </div>}
+        {kmTab==="summer"&&!isParActor&&<SummerView kidId={activeKid}/>}
+        {kmTab==="bills"&&!isParActor&&<BillsView kidId={activeKid}/>}
+        {kmTab==="store"&&!isParActor&&<StoreView kidId={activeKid}/>}
+        {kmTab==="money"&&!isParActor&&<MoneyView kidId={activeKid}/>}
+      </ErrBound>
+    </div>
+  </div>);
+}
+
+function ComboModalC(){
+  const{comboModal,setComboModal,pool,saveCombo,removeCombo}=useA();
+  const m=comboModal;
+  const editing=!!(m&&m.id);
+  const[f,setF]=useState({title:editing?m.title:"",bonusCents:editing?(m.bonusCents||0):100,ids:editing?(m.chorePoolIds||[]):[]});
+  if(!m)return null;
+  const toggle=id=>setF(x=>({...x,ids:x.ids.includes(id)?x.ids.filter(i=>i!==id):[...x.ids,id]}));
+  const groups={};pool.forEach(p=>{const a=p.area||"Other";(groups[a]=groups[a]||[]).push(p);});
+  return(<div className="overlay" onClick={()=>setComboModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
+    <div className="modal-h">🧩 {editing?"Edit":"New"} Combo Bonus</div>
+    <div className="fg"><label className="fl">Name</label>
+      <input className="fi" placeholder="e.g. All the toilets" value={f.title} onChange={e=>setF(x=>({...x,title:e.target.value}))}/></div>
+    <div className="fg"><label className="fl">Bonus ($) — all done same day, same person</label>
+      <input className="fi" type="number" step="0.25" min="0" value={(f.bonusCents/100)} onChange={e=>setF(x=>({...x,bonusCents:Math.round((parseFloat(e.target.value)||0)*100)}))}/></div>
+    <div className="fg"><label className="fl">Pool chores in this combo ({f.ids.length} selected)</label>
+      <div style={{maxHeight:220,overflowY:"auto",border:"1px solid var(--bdr)",borderRadius:8,padding:8}}>
+        {Object.entries(groups).sort((a,b)=>a[0].localeCompare(b[0])).map(([area,items])=>(<div key={area}>
+          <div style={{fontSize:11,fontWeight:800,color:"var(--tx3)",margin:"6px 0 2px"}}>{area}</div>
+          {items.map(p=>(<label key={p.id} style={{display:"flex",gap:8,alignItems:"center",fontSize:13,padding:"3px 0",cursor:"pointer"}}>
+            <input type="checkbox" checked={f.ids.includes(p.id)} onChange={()=>toggle(p.id)}/>{p.title}
+          </label>))}
+        </div>))}
+      </div></div>
+    <div className="fax">
+      {editing&&<button className="btn bco" onClick={()=>{removeCombo(m.id);setComboModal(null);}}>Delete</button>}
+      <button className="btn bg" onClick={()=>setComboModal(null)}>Cancel</button>
+      <button className="btn bp" disabled={!f.title.trim()||f.ids.length<2||!f.bonusCents}
+        onClick={()=>{const payload={title:f.title.trim(),bonusCents:f.bonusCents,chorePoolIds:f.ids,active:true};if(editing)payload.id=m.id;saveCombo(payload);setComboModal(null);}}>Save combo</button>
+    </div>
+  </div></div>);
+}
+function SettleBillModalC(){
+  const{settleModal,setSettleModal,kidById,billPay,settleBill}=useA();
+  const m=settleModal;
+  const[carry,setCarry]=useState(false);
+  const[busy,setBusy]=useState(false);
+  if(!m)return null;
+  const kid=kidById(m.kidId);
+  const bal=kid?.balanceCents||0;
+  const monthKey2=mk(ld());
+  const paidSoFar=Object.values(billPay[m.kidId]||{}).filter(p=>p.billId===m.id&&p.monthKey===monthKey2).reduce((a,p)=>a+(p.amountCents||0),0);
+  const totalDue=(m.amountCents||0)+(m.carryoverCents||0);
+  const remaining=Math.max(0,totalDue-paidSoFar);
+  const willPay=Math.min(bal,remaining);
+  const shortfall=remaining-willPay;
+  const R=({l,v,strong,red})=><div style={{display:"flex",justifyContent:"space-between",fontSize:13,padding:"3px 0",fontWeight:strong?800:500,color:red?"var(--re)":"inherit"}}><span>{l}</span><span>{v}</span></div>;
+  return(<div className="overlay" onClick={()=>setSettleModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
+    <div className="modal-h">🧾 Settle {m.name} — {kid?.name}</div>
+    <div className="card" style={{marginBottom:12}}>
+      <R l={`Due this month${m.carryoverCents?` (incl. ${c$(m.carryoverCents)} carried over)`:""}`} v={c$(totalDue)}/>
+      {paidSoFar>0&&<R l="Already paid this month" v={`−${c$(paidSoFar)}`}/>}
+      <R l={`${kid?.name||"Kid"}'s balance`} v={c$(bal)}/>
+      <div style={{borderTop:"1px solid var(--bdr)",margin:"6px 0"}}/>
+      <R l="Pays now" v={c$(willPay)} strong/>
+      {shortfall>0&&<R l="Family covers" v={c$(shortfall)} red/>}
+      {remaining===0&&<div style={{fontSize:12,color:"var(--gr)",fontWeight:700}}>This month is already fully paid ✓</div>}
+    </div>
+    {shortfall>0&&(
+      <div className="sw-row" style={{fontSize:13,marginBottom:12}}>
+        <span>Add {c$(shortfall)} to next month's goal</span>
+        <label className="sw"><input type="checkbox" checked={carry} onChange={e=>setCarry(e.target.checked)}/><div className="sw-t"/><div className="sw-th"/></label>
+      </div>
+    )}
+    <div className="fax">
+      <button className="btn bg" onClick={()=>setSettleModal(null)}>Cancel</button>
+      <button className="btn bp" disabled={busy||remaining===0} onClick={async()=>{setBusy(true);try{await settleBill(m,{carry});}finally{setBusy(false);}}}>Settle month</button>
+    </div>
+  </div></div>);
+}
+function Toasts(){
+  const{toasts}=useA();
+  return(<div className="toasts">{toasts.map(t=><div key={t.id} className={`toast t-${t.type}`}>{t.msg}</div>)}</div>);
+}
+function Shell(){
+  const{activeKid,billModal,bills,bonusModal,choreModal,chores,comboModal,editCompModal,enterKid,enterParent,enterParentProfile,exitToPicker,giveBonus,goPin,isToday,kidById,kids,noteModal,online,parentMode,parentTaskModal,parents,payBillModal,pendCount,pool,poolAddModal,poolEditModal,ready,saveCfg,screen,selDate,setActiveKid,setBillModal,setBonusModal,setChoreModal,setNoteModal,setParentMode,setParentTaskModal,setPoolAddModal,setScreen,setSelDate,setShowCfg,setShowTimer,setView,settleModal,showCfg,showTimer,view}=useA();
+if(screen==="picker")return(<>
+  <style>{CSS}</style>
+  {!online&&ready&&<div className="offline-bar">⚠️ Offline</div>}
+  {showCfg&&<FbCfgModal onSave={saveCfg} onSkip={()=>setShowCfg(false)}/>}
+  <div className="picker">
+    <div style={{fontSize:26,fontWeight:900,color:"var(--pr)",marginBottom:4}}>WattsHub</div>
+    <div style={{fontSize:14,color:"var(--tx2)",marginBottom:28}}>Who's using the app?</div>
+    <div className="pgrid">
+      {kids.map(k=><div key={k.id} className="pcard" onClick={()=>enterKid(k.id)}>
+        <Av initials={k.initials} colorIdx={k.colorIdx} size={48}/>
+        <div style={{fontSize:14,fontWeight:800}}>{k.name}</div>
+        <div style={{fontSize:11,color:"var(--tx2)"}}>Age {k.age}</div>
+        <div style={{fontSize:13,fontWeight:800,color:"var(--gr)"}}>{c$(k.balanceCents||0)}</div>
+      </div>)}
+      {parents.map(p=><div key={p.id} className="pcard" onClick={()=>enterParentProfile(p.id)}>
+        <Av initials={p.initials} colorIdx={p.colorIdx||4} size={48}/>
+        <div style={{fontSize:14,fontWeight:800}}>{p.name}</div>
+        <div style={{fontSize:11,color:"var(--tx2)"}}>Parent</div>
+      </div>)}
+      <div className="pcard" onClick={goPin}>
+        <div style={{width:48,height:48,borderRadius:"50%",background:"var(--aml)",color:"var(--am)",fontSize:22,display:"flex",alignItems:"center",justifyContent:"center"}}>🔑</div>
+        <div style={{fontSize:14,fontWeight:800}}>Parent Dashboard</div>
+        <div style={{fontSize:11,color:"var(--tx2)"}}>PIN required</div>
+      </div>
+    </div>
+    {!ready&&<div style={{marginTop:22,fontSize:12,color:"var(--tx3)"}}>Demo mode — <button onClick={()=>setShowCfg(true)} className="btn bg bsm">Connect Firebase</button></div>}
+  </div>
+  <Toasts/>
+</>);
+
+if(screen==="pin-set")return(<><style>{CSS}</style><PINScreen mode="set" onSuccess={enterParent} onBack={()=>setScreen("picker")}/></>);
+if(screen==="pin-verify")return(<><style>{CSS}</style><PINScreen mode="verify" onSuccess={enterParent} onBack={()=>setScreen("picker")}/></>);
+if(screen==="kid")return(<><style>{CSS}</style><ErrBound><KidModeApp/></ErrBound>
+  {choreModal&&<ChoreModalComp/>}{editCompModal&&<EditCompModalComp/>}{parentTaskModal&&<ParentTaskModalComp/>}
+  {poolAddModal&&<PoolAddModalComp/>}{poolEditModal&&<PoolEditModalComp/>}{comboModal&&<ComboModalC/>}{settleModal&&<SettleBillModalC/>}{bonusModal&&<BonusModalC m={bonusModal} onClose={()=>setBonusModal(null)} onGive={giveBonus}/>}{noteModal&&<NoteModal/>}<Toasts/></>);
+
+/* Parent app */
+const NAV=[
+  {id:"dashboard",ic:"⊞",l:"Dashboard"},
+  {id:"chores",   ic:"✓",l:"Chores"},
+  {id:"pool",     ic:"🎯",l:"Pool"},
+  {id:"summary",  ic:"📊",l:"Summary"},
+  {id:"checkin",  ic:"📋",l:"Check-In"},
+  {id:"bills",    ic:"💸",l:"Bills"},
+  {id:"summer",   ic:"☀️",l:"Summer"},
+  {id:"store",    ic:"🛍️",l:"Store"},
+  {id:"money",    ic:"💵",l:"Money"},
+  {id:"settings", ic:"⚙",l:"Settings"},
+];
+const BNAV=[
+  {id:"dashboard",ic:"⊞",l:"Home"},
+  {id:"chores",   ic:"✓",l:"Chores"},
+  {id:"pool",     ic:"🎯",l:"Pool"},
+  {id:"summary",  ic:"📊",l:"Summary"},
+  {id:"checkin",  ic:"📋",l:"Check-In"},
+];
+const TITLES={dashboard:"Dashboard",chores:"Chores",pool:"Chore Pool",summary:"Summary",checkin:"Weekly Check-In",bills:"Bills & Goals",summer:"Summer Program",store:"Family Store",money:"Money",settings:"Settings"};
+
+return(<>
+  <style>{CSS}</style>
+  {!online&&ready&&<div className="offline-bar">⚠️ Offline — changes will sync when reconnected</div>}
+  {showCfg&&<FbCfgModal onSave={saveCfg} onSkip={()=>setShowCfg(false)}/>}
+  {choreModal&&<ChoreModalComp/>}
+  {editCompModal&&<EditCompModalComp/>}
+  {billModal&&<BillModalComp/>}
+  {payBillModal&&<PayBillModalComp/>}
+  {poolAddModal&&<PoolAddModalComp/>}
+  {poolEditModal&&<PoolEditModalComp/>}
+  {comboModal&&<ComboModalC/>}
+  {settleModal&&<SettleBillModalC/>}
+  {parentTaskModal&&<ParentTaskModalComp/>}
+  {bonusModal&&<BonusModalC m={bonusModal} onClose={()=>setBonusModal(null)} onGive={giveBonus}/>}
+  {noteModal&&<NoteModal/>}
+  {showTimer&&<FocusTimer/>}
+
+  <div className="layout">
+    <aside className="sidebar">
+      <div className="slogo">
+        WattsHub
+        {!ready&&<span style={{fontSize:9,background:"var(--am)",color:"#fff",borderRadius:3,padding:"1px 5px",fontWeight:800}}>DEMO</span>}
+        {ready&&!online&&<span style={{fontSize:9,background:"var(--re)",color:"#fff",borderRadius:3,padding:"1px 5px",fontWeight:800}}>OFF</span>}
+      </div>
+      <div className="snav">
+        <div className="sdiv">Navigate</div>
+        {NAV.map(n=><button key={n.id} className={`sni${view===n.id?" act":""}`}
+          onClick={()=>{setView(n.id);if(!["chores","store","money"].includes(n.id))setActiveKid(null);}}>
+          <span style={{fontSize:15,width:20,textAlign:"center"}}>{n.ic}</span>{n.l}
+          {n.id==="chores"&&pendCount>0&&<span className="sbadge">{pendCount}</span>}
+        </button>)}
+        <div className="sdiv" style={{marginTop:8}}>Kids</div>
+        {kids.map(k=><button key={k.id} className={`skid${activeKid===k.id?" act":""}`}
+          onClick={()=>{setActiveKid(k.id);setSelDate(ld());setView("chores");}}>
+          <Av initials={k.initials} colorIdx={k.colorIdx} size={22}/>
+          <span style={{flex:1}}>{k.name}</span>
+          <span style={{fontSize:11,color:"var(--am)",fontWeight:700}}>{c$(k.balanceCents||0)}</span>
+        </button>)}
+        {activeKid&&<button className="skid" style={{color:"var(--tx3)"}} onClick={()=>{setActiveKid(null);setView("dashboard");}}>
+          <span style={{width:22,textAlign:"center"}}>←</span>All kids
+        </button>}
+        {parentMode&&activeKid&&(()=>{const k=kidById(activeKid);return k?(<div style={{display:"flex",gap:4,padding:"4px 10px"}}>
+          <button className="btn bte bxs" style={{flex:1}} onClick={()=>setBonusModal({kidId:k.id,kidName:k.name})}>🌟 Bonus</button>
+          <button className="btn bbl bxs" style={{flex:1}} onClick={()=>setNoteModal({kidId:k.id,kidName:k.name})}>📝 Note</button>
+        </div>):null;})()}
+        <div className="sdiv" style={{marginTop:8}}>Parents</div>
+        {parents.map(p=><button key={p.id} className="skid" onClick={()=>setParentTaskModal({parentId:p.id})}>
+          <Av initials={p.initials} colorIdx={p.colorIdx||4} size={22}/>
+          {p.name}
+        </button>)}
+      </div>
+      <div className="sfoot">
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"4px 0",marginBottom:5}}>
+          <span style={{fontSize:12,fontWeight:600,color:"var(--tx2)"}}>Parent mode</span>
+          <label className="sw"><input type="checkbox" checked={parentMode} onChange={e=>setParentMode(e.target.checked)}/><div className="sw-t"/><div className="sw-th"/></label>
+        </div>
+        <button className="sni" style={{color:"var(--tx3)"}} onClick={exitToPicker}><span style={{width:20,textAlign:"center"}}>←</span>Profile picker</button>
+        <button className="sni" style={{color:"var(--tx3)"}} onClick={()=>setShowCfg(true)}><span style={{width:20,textAlign:"center"}}>⚙</span>Firebase setup</button>
+      </div>
+    </aside>
+
+    <main className="main">
+      <div className="topbar">
+        <div>
+          <div style={{fontSize:16,fontWeight:800}}>{TITLES[view]||view}</div>
+          <div style={{fontSize:11,color:"var(--tx2)",marginTop:1}}>
+            {view==="chores"?(activeKid?kidById(activeKid)?.name+" · ":"")+(isToday?"Today":lp(selDate).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"})):""}
+          </div>
+        </div>
+        <div style={{display:"flex",gap:6,alignItems:"center"}}>
+          {ready&&<span style={{fontSize:11,fontWeight:700,padding:"3px 8px",borderRadius:5,background:online?"var(--grl)":"var(--aml)",color:online?"var(--gr)":"var(--am)"}}>{online?"● Live":"⚠ Offline"}</span>}
+          {pendCount>0&&parentMode&&<span style={{fontSize:11,fontWeight:700,padding:"3px 8px",borderRadius:5,background:"var(--aml)",color:"var(--am)"}}>{pendCount} pending</span>}
+          {parentMode&&activeKid&&<button className="btn bte bsm" onClick={()=>setBonusModal({kidId:activeKid,kidName:kidById(activeKid)?.name||""})}>🌟 Bonus</button>}
+          {parentMode&&activeKid&&<button className="btn bbl bsm" onClick={()=>setNoteModal({kidId:activeKid,kidName:kidById(activeKid)?.name||""})}>📝 Note</button>}
+          {parentMode&&<button className="btn bg bsm" onClick={()=>setShowTimer(true)}>⏱</button>}
+          {parentMode&&<button className="btn bg bsm" onClick={()=>setParentTaskModal({})}>+ Log Task</button>}
+          {parentMode&&view==="pool"&&<button className="btn bbl bsm" onClick={()=>setPoolAddModal(true)}>+ Pool Chore</button>}
+          {parentMode&&view==="bills"&&<button className="btn bg bsm" onClick={()=>setBillModal({})}>+ Bill</button>}
+          {parentMode&&<button className="btn bg bsm" onClick={()=>setChoreModal({mode:"quick",data:{}})}>+ Quick</button>}
+          {parentMode&&<button className="btn bp bsm" onClick={()=>setChoreModal({mode:"add",data:{}})}>+ Chore</button>}
+        </div>
+      </div>
+      <div className="content">
+        <ErrBound>
+          {view==="dashboard"&&<DashboardView/>}
+          {view==="chores"&&<ChoresView actorId={activeKid||null} isParent={parentMode} isParentActor={false}/>}
+          {view==="pool"&&<PoolView actorId={activeKid||null} showManage={parentMode}/>}
+          {view==="summary"&&<SummaryView/>}
+          {view==="checkin"&&<WeeklyCheckinView/>}
+          {view==="bills"&&<BillsView/>}
+          {view==="summer"&&<SummerView/>}
+          {view==="store"&&<StoreView/>}
+          {view==="money"&&<MoneyView/>}
+          {view==="settings"&&<SettingsView/>}
         </ErrBound>
       </div>
-    </div>);
-  }
+    </main>
+  </div>
 
-  /* ── Screen routing ── */
-  const Toasts=()=><div className="toasts">{toasts.map(t=><div key={t.id} className={`toast t-${t.type}`}>{t.msg}</div>)}</div>;
-
-  if(screen==="picker")return(<>
-    <style>{CSS}</style>
-    {!online&&ready&&<div className="offline-bar">⚠️ Offline</div>}
-    {showCfg&&<FbCfgModal onSave={saveCfg} onSkip={()=>setShowCfg(false)}/>}
-    <div className="picker">
-      <div style={{fontSize:26,fontWeight:900,color:"var(--pr)",marginBottom:4}}>WattsHub</div>
-      <div style={{fontSize:14,color:"var(--tx2)",marginBottom:28}}>Who's using the app?</div>
-      <div className="pgrid">
-        {kids.map(k=><div key={k.id} className="pcard" onClick={()=>enterKid(k.id)}>
-          <Av initials={k.initials} colorIdx={k.colorIdx} size={48}/>
-          <div style={{fontSize:14,fontWeight:800}}>{k.name}</div>
-          <div style={{fontSize:11,color:"var(--tx2)"}}>Age {k.age}</div>
-          <div style={{fontSize:13,fontWeight:800,color:"var(--gr)"}}>{c$(k.balanceCents||0)}</div>
-        </div>)}
-        {parents.map(p=><div key={p.id} className="pcard" onClick={()=>enterParentProfile(p.id)}>
-          <Av initials={p.initials} colorIdx={p.colorIdx||4} size={48}/>
-          <div style={{fontSize:14,fontWeight:800}}>{p.name}</div>
-          <div style={{fontSize:11,color:"var(--tx2)"}}>Parent</div>
-        </div>)}
-        <div className="pcard" onClick={goPin}>
-          <div style={{width:48,height:48,borderRadius:"50%",background:"var(--aml)",color:"var(--am)",fontSize:22,display:"flex",alignItems:"center",justifyContent:"center"}}>🔑</div>
-          <div style={{fontSize:14,fontWeight:800}}>Parent Dashboard</div>
-          <div style={{fontSize:11,color:"var(--tx2)"}}>PIN required</div>
-        </div>
-      </div>
-      {!ready&&<div style={{marginTop:22,fontSize:12,color:"var(--tx3)"}}>Demo mode — <button onClick={()=>setShowCfg(true)} className="btn bg bsm">Connect Firebase</button></div>}
-    </div>
-    <Toasts/>
-  </>);
-
-  if(screen==="pin-set")return(<><style>{CSS}</style><PINScreen mode="set" onSuccess={enterParent} onBack={()=>setScreen("picker")}/></>);
-  if(screen==="pin-verify")return(<><style>{CSS}</style><PINScreen mode="verify" onSuccess={enterParent} onBack={()=>setScreen("picker")}/></>);
-  if(screen==="kid")return(<><style>{CSS}</style><ErrBound><KidModeApp/></ErrBound>
-    {choreModal&&<ChoreModalComp/>}{editCompModal&&<EditCompModalComp/>}{parentTaskModal&&<ParentTaskModalComp/>}
-    {poolAddModal&&<PoolAddModalComp/>}{poolEditModal&&<PoolEditModalComp/>}{bonusModal&&<BonusModalC m={bonusModal} onClose={()=>setBonusModal(null)} onGive={giveBonus}/>}{noteModal&&<NoteModal/>}<Toasts/></>);
-
-  /* Parent app */
-  const NAV=[
-    {id:"dashboard",ic:"⊞",l:"Dashboard"},
-    {id:"chores",   ic:"✓",l:"Chores"},
-    {id:"pool",     ic:"🎯",l:"Pool"},
-    {id:"summary",  ic:"📊",l:"Summary"},
-    {id:"checkin",  ic:"📋",l:"Check-In"},
-    {id:"bills",    ic:"💸",l:"Bills"},
-    {id:"summer",   ic:"☀️",l:"Summer"},
-    {id:"store",    ic:"🛍️",l:"Store"},
-    {id:"money",    ic:"💵",l:"Money"},
-    {id:"settings", ic:"⚙",l:"Settings"},
-  ];
-  const BNAV=[
-    {id:"dashboard",ic:"⊞",l:"Home"},
-    {id:"chores",   ic:"✓",l:"Chores"},
-    {id:"pool",     ic:"🎯",l:"Pool"},
-    {id:"summary",  ic:"📊",l:"Summary"},
-    {id:"checkin",  ic:"📋",l:"Check-In"},
-  ];
-  const TITLES={dashboard:"Dashboard",chores:"Chores",pool:"Chore Pool",summary:"Summary",checkin:"Weekly Check-In",bills:"Bills & Goals",summer:"Summer Program",store:"Family Store",money:"Money",settings:"Settings"};
-
-  return(<>
-    <style>{CSS}</style>
-    {!online&&ready&&<div className="offline-bar">⚠️ Offline — changes will sync when reconnected</div>}
-    {showCfg&&<FbCfgModal onSave={saveCfg} onSkip={()=>setShowCfg(false)}/>}
-    {choreModal&&<ChoreModalComp/>}
-    {editCompModal&&<EditCompModalComp/>}
-    {billModal&&<BillModalComp/>}
-    {payBillModal&&<PayBillModalComp/>}
-    {poolAddModal&&<PoolAddModalComp/>}
-    {poolEditModal&&<PoolEditModalComp/>}
-    {parentTaskModal&&<ParentTaskModalComp/>}
-    {bonusModal&&<BonusModalC m={bonusModal} onClose={()=>setBonusModal(null)} onGive={giveBonus}/>}
-    {noteModal&&<NoteModal/>}
-    {showTimer&&<FocusTimer/>}
-
-    <div className="layout">
-      <aside className="sidebar">
-        <div className="slogo">
-          WattsHub
-          {!ready&&<span style={{fontSize:9,background:"var(--am)",color:"#fff",borderRadius:3,padding:"1px 5px",fontWeight:800}}>DEMO</span>}
-          {ready&&!online&&<span style={{fontSize:9,background:"var(--re)",color:"#fff",borderRadius:3,padding:"1px 5px",fontWeight:800}}>OFF</span>}
-        </div>
-        <div className="snav">
-          <div className="sdiv">Navigate</div>
-          {NAV.map(n=><button key={n.id} className={`sni${view===n.id?" act":""}`}
-            onClick={()=>{setView(n.id);if(!["chores","store","money"].includes(n.id))setActiveKid(null);}}>
-            <span style={{fontSize:15,width:20,textAlign:"center"}}>{n.ic}</span>{n.l}
-            {n.id==="chores"&&pendCount>0&&<span className="sbadge">{pendCount}</span>}
-          </button>)}
-          <div className="sdiv" style={{marginTop:8}}>Kids</div>
-          {kids.map(k=><button key={k.id} className={`skid${activeKid===k.id?" act":""}`}
-            onClick={()=>{setActiveKid(k.id);setSelDate(ld());setView("chores");}}>
-            <Av initials={k.initials} colorIdx={k.colorIdx} size={22}/>
-            <span style={{flex:1}}>{k.name}</span>
-            <span style={{fontSize:11,color:"var(--am)",fontWeight:700}}>{c$(k.balanceCents||0)}</span>
-          </button>)}
-          {activeKid&&<button className="skid" style={{color:"var(--tx3)"}} onClick={()=>{setActiveKid(null);setView("dashboard");}}>
-            <span style={{width:22,textAlign:"center"}}>←</span>All kids
-          </button>}
-          {parentMode&&activeKid&&(()=>{const k=kidById(activeKid);return k?(<div style={{display:"flex",gap:4,padding:"4px 10px"}}>
-            <button className="btn bte bxs" style={{flex:1}} onClick={()=>setBonusModal({kidId:k.id,kidName:k.name})}>🌟 Bonus</button>
-            <button className="btn bbl bxs" style={{flex:1}} onClick={()=>setNoteModal({kidId:k.id,kidName:k.name})}>📝 Note</button>
-          </div>):null;})()}
-          <div className="sdiv" style={{marginTop:8}}>Parents</div>
-          {parents.map(p=><button key={p.id} className="skid" onClick={()=>setParentTaskModal({parentId:p.id})}>
-            <Av initials={p.initials} colorIdx={p.colorIdx||4} size={22}/>
-            {p.name}
-          </button>)}
-        </div>
-        <div className="sfoot">
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"4px 0",marginBottom:5}}>
-            <span style={{fontSize:12,fontWeight:600,color:"var(--tx2)"}}>Parent mode</span>
-            <label className="sw"><input type="checkbox" checked={parentMode} onChange={e=>setParentMode(e.target.checked)}/><div className="sw-t"/><div className="sw-th"/></label>
-          </div>
-          <button className="sni" style={{color:"var(--tx3)"}} onClick={exitToPicker}><span style={{width:20,textAlign:"center"}}>←</span>Profile picker</button>
-          <button className="sni" style={{color:"var(--tx3)"}} onClick={()=>setShowCfg(true)}><span style={{width:20,textAlign:"center"}}>⚙</span>Firebase setup</button>
-        </div>
-      </aside>
-
-      <main className="main">
-        <div className="topbar">
-          <div>
-            <div style={{fontSize:16,fontWeight:800}}>{TITLES[view]||view}</div>
-            <div style={{fontSize:11,color:"var(--tx2)",marginTop:1}}>
-              {view==="chores"?(activeKid?kidById(activeKid)?.name+" · ":"")+(isToday?"Today":lp(selDate).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"})):""}
-            </div>
-          </div>
-          <div style={{display:"flex",gap:6,alignItems:"center"}}>
-            {ready&&<span style={{fontSize:11,fontWeight:700,padding:"3px 8px",borderRadius:5,background:online?"var(--grl)":"var(--aml)",color:online?"var(--gr)":"var(--am)"}}>{online?"● Live":"⚠ Offline"}</span>}
-            {pendCount>0&&parentMode&&<span style={{fontSize:11,fontWeight:700,padding:"3px 8px",borderRadius:5,background:"var(--aml)",color:"var(--am)"}}>{pendCount} pending</span>}
-            {parentMode&&activeKid&&<button className="btn bte bsm" onClick={()=>setBonusModal({kidId:activeKid,kidName:kidById(activeKid)?.name||""})}>🌟 Bonus</button>}
-            {parentMode&&activeKid&&<button className="btn bbl bsm" onClick={()=>setNoteModal({kidId:activeKid,kidName:kidById(activeKid)?.name||""})}>📝 Note</button>}
-            {parentMode&&<button className="btn bg bsm" onClick={()=>setShowTimer(true)}>⏱</button>}
-            {parentMode&&<button className="btn bg bsm" onClick={()=>setParentTaskModal({})}>+ Log Task</button>}
-            {parentMode&&view==="pool"&&<button className="btn bbl bsm" onClick={()=>setPoolAddModal(true)}>+ Pool Chore</button>}
-            {parentMode&&view==="bills"&&<button className="btn bg bsm" onClick={()=>setBillModal({})}>+ Bill</button>}
-            {parentMode&&<button className="btn bg bsm" onClick={()=>setChoreModal({mode:"quick",data:{}})}>+ Quick</button>}
-            {parentMode&&<button className="btn bp bsm" onClick={()=>setChoreModal({mode:"add",data:{}})}>+ Chore</button>}
-          </div>
-        </div>
-        <div className="content">
-          <ErrBound>
-            {view==="dashboard"&&<DashboardView/>}
-            {view==="chores"&&<ChoresView actorId={activeKid||null} isParent={parentMode} isParentActor={false}/>}
-            {view==="pool"&&<PoolView actorId={activeKid||null} showManage={parentMode}/>}
-            {view==="summary"&&<SummaryView/>}
-            {view==="checkin"&&<WeeklyCheckinView/>}
-            {view==="bills"&&<BillsView/>}
-            {view==="summer"&&<SummerView/>}
-            {view==="store"&&<StoreView/>}
-            {view==="money"&&<MoneyView/>}
-            {view==="settings"&&<SettingsView/>}
-          </ErrBound>
-        </div>
-      </main>
-    </div>
-
-    <nav className="bnav"><div className="bnav-in">
-      {BNAV.map(n=><button key={n.id} className={`bnav-btn${view===n.id?" act":""}`}
-        onClick={()=>{setView(n.id);setActiveKid(null);}}>
-        <span className="bnav-ic">{n.ic}</span>{n.l}
-      </button>)}
-    </div></nav>
-    <Toasts/>
-  </>);
+  <nav className="bnav"><div className="bnav-in">
+    {BNAV.map(n=><button key={n.id} className={`bnav-btn${view===n.id?" act":""}`}
+      onClick={()=>{setView(n.id);setActiveKid(null);}}>
+      <span className="bnav-ic">{n.ic}</span>{n.l}
+    </button>)}
+  </div></nav>
+  <Toasts/>
+</>);
 }
