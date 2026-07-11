@@ -66,6 +66,30 @@ const tkid=(id)=>`tx_${Date.now()}_${id}_${uid6()}`;
 const nextMonthFirst=()=>{const n=new Date();return new Date(n.getFullYear(),n.getMonth()+1,1);};
 const nextDueLabel=()=>nextMonthFirst().toLocaleDateString("en-US",{month:"short",day:"numeric"});
 const eodTs=()=>{const d=new Date();d.setHours(23,59,59,999);return d.getTime();};
+/* ── CSV helpers (chore spreadsheet export/import) ── */
+const csvEsc=v=>{const s=String(v??"");return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;};
+function csvParse(text){
+  const rows=[];let row=[],cur="",inQ=false;
+  for(let i=0;i<text.length;i++){
+    const ch=text[i];
+    if(inQ){
+      if(ch==='"'){if(text[i+1]==='"'){cur+='"';i++;}else inQ=false;}
+      else cur+=ch;
+    }else if(ch==='"')inQ=true;
+    else if(ch===","){row.push(cur);cur="";}
+    else if(ch==="\n"||ch==="\r"){
+      if(ch==="\r"&&text[i+1]==="\n")i++;
+      row.push(cur);cur="";
+      if(row.some(c=>c.trim()!==""))rows.push(row);
+      row=[];
+    }else cur+=ch;
+  }
+  row.push(cur);
+  if(row.some(c=>c.trim()!==""))rows.push(row);
+  return rows;
+}
+const DAY_MAP={mon:"Mon",monday:"Mon",tue:"Tue",tues:"Tue",tuesday:"Tue",wed:"Wed",wednesday:"Wed",thu:"Thu",thur:"Thu",thurs:"Thu",thursday:"Thu",fri:"Fri",friday:"Fri",sat:"Sat",saturday:"Sat",sun:"Sun",sunday:"Sun"};
+const truthyCell=v=>["yes","y","x","true","1","delete"].includes(String(v||"").trim().toLowerCase());
 /* Server-side delta for balanceCents. Concurrent writes from multiple devices
    compose instead of clobbering each other (fixes bonuses/earnings vanishing). */
 const inc=(n)=>_increment(n);
@@ -540,6 +564,7 @@ export default function WattsHub(){
   const[noteModal,setNoteModal]=useState(null);   // {kidId, kidName}
   const[comboModal,setComboModal]=useState(null);  // combo object or {} for new
   const[settleModal,setSettleModal]=useState(null);// bill object
+  const[csvImport,setCsvImport]=useState(null);    // {items,errors}
 
   const{list:toasts,add:toast}=useToasts();
 
@@ -915,6 +940,120 @@ export default function WattsHub(){
     toast(`Added ${n} cleaning chores ✓`,"success");
   }
 
+  /* ── Chore spreadsheet (CSV) export & import ── */
+  const CSV_HEADER=["kind","id","title","amount","assigned_to","schedule","days","approval","area","frequency","note","delete"];
+  function exportChoresCsv(){
+    const nameOf=id=>(kidById(id)||parById(id))?.name||id;
+    const lines=[CSV_HEADER.join(",")];
+    chores.forEach(c=>lines.push([
+      "assigned",c.id,c.title,((c.priceCents||0)/100).toFixed(2),
+      (c.assignedTo||[]).map(nameOf).join("; "),
+      c.scheduleType||"daily",(c.scheduleDays||[]).join("; "),
+      c.requiresApproval?"yes":"no","","","",""
+    ].map(csvEsc).join(",")));
+    pool.forEach(p=>lines.push([
+      "pool",p.id,p.title,((p.priceCents||0)/100).toFixed(2),
+      "","","","",p.area||"",p.recurring?(p.freq||"weekly"):"once",p.note||"",""
+    ].map(csvEsc).join(",")));
+    const csv=lines.join("\n");
+    try{
+      const blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement("a");
+      a.href=url;a.download=`wattshub-chores-${ld()}.csv`;
+      document.body.appendChild(a);a.click();a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),4000);
+      toast(`Exported ${chores.length+pool.length} chores ✓`,"success");
+    }catch(e){toast(`Export failed: ${e?.message||e}`,"error");}
+  }
+  function buildCsvImportPlan(text){
+    const rows=csvParse(text);
+    if(!rows.length)return{items:[],errors:["File is empty."]};
+    const header=rows[0].map(h=>h.trim().toLowerCase());
+    const col=name=>header.indexOf(name);
+    if(col("kind")<0||col("title")<0)return{items:[],errors:['Missing required columns — keep the exported header row (needs at least "kind" and "title").']};
+    const nameMap={};[...kids,...parents].forEach(x=>{nameMap[x.name.trim().toLowerCase()]=x.id;nameMap[x.id]=x.id;});
+    const items=[],errors=[];
+    const cell=(r,name)=>{const i=col(name);return i<0?"":String(r[i]??"").trim();};
+    rows.slice(1).forEach((r,ri)=>{
+      const line=ri+2;
+      const kind=cell(r,"kind").toLowerCase();
+      if(kind!=="assigned"&&kind!=="pool"){errors.push(`Line ${line}: kind must be "assigned" or "pool".`);return;}
+      const id=cell(r,"id");
+      const title=cell(r,"title");
+      const del=truthyCell(cell(r,"delete"));
+      if(del){
+        if(!id){errors.push(`Line ${line}: delete needs an id.`);return;}
+        const exists=kind==="assigned"?chores.some(c=>c.id===id):pool.some(p=>p.id===id);
+        if(!exists){errors.push(`Line ${line}: ${kind} chore "${id}" not found — can't delete.`);return;}
+        items.push({action:"delete",kind,id,title:title||id});return;
+      }
+      if(!title){errors.push(`Line ${line}: missing title.`);return;}
+      const amtRaw=cell(r,"amount").replace(/[$\s]/g,"");
+      const amt=amtRaw===""?null:Math.round(parseFloat(amtRaw)*100);
+      if(amtRaw!==""&&(!isFinite(amt)||amt<0)){errors.push(`Line ${line}: bad amount "${cell(r,"amount")}".`);return;}
+      const fields={title};
+      if(amt!=null)fields.priceCents=amt;
+      if(kind==="assigned"){
+        const rawNames=cell(r,"assigned_to");
+        if(rawNames!==""||!id){
+          const ids=[];let bad=null;
+          rawNames.split(/[;+]/).map(s=>s.trim()).filter(Boolean).forEach(nm=>{
+            const found=nameMap[nm.toLowerCase()];
+            if(found)ids.push(found);else bad=nm;
+          });
+          if(bad){errors.push(`Line ${line}: unknown person "${bad}".`);return;}
+          fields.assignedTo=ids;
+        }
+        const sched=cell(r,"schedule").toLowerCase();
+        if(sched&&sched!=="daily"&&sched!=="weekly"){errors.push(`Line ${line}: schedule must be daily or weekly.`);return;}
+        if(sched)fields.scheduleType=sched;
+        const daysRaw=cell(r,"days");
+        if(daysRaw!==""){
+          const days=[];let badD=null;
+          daysRaw.split(/[;,+]/).map(s=>s.trim()).filter(Boolean).forEach(d=>{
+            const dd=DAY_MAP[d.toLowerCase()];if(dd)days.push(dd);else badD=d;
+          });
+          if(badD){errors.push(`Line ${line}: unknown day "${badD}".`);return;}
+          fields.scheduleDays=days;
+        }
+        const app=cell(r,"approval");
+        if(app!=="")fields.requiresApproval=truthyCell(app);
+        const exists=id&&chores.some(c=>c.id===id);
+        if(id&&!exists){errors.push(`Line ${line}: assigned chore id "${id}" not found — clear the id to create a new chore.`);return;}
+        items.push({action:exists?"update":"create",kind,id:id||null,fields,title});
+      }else{
+        const area=cell(r,"area");if(area!==""||!id)fields.area=area;
+        const note=cell(r,"note");if(note!==""||!id)fields.note=note;
+        const freq=cell(r,"frequency").toLowerCase();
+        if(freq!==""){
+          if(freq==="once"||freq==="one-time"||freq==="onetime"){fields.recurring=false;fields.freq=null;fields.intervalDays=null;}
+          else if(FREQ_OPTS.includes(freq)){fields.recurring=true;fields.freq=freq;fields.intervalDays=INTERVAL_DAYS[freq]||7;}
+          else{errors.push(`Line ${line}: frequency must be one of ${FREQ_OPTS.join(", ")}, or "once".`);return;}
+        }
+        const exists=id&&pool.some(p=>p.id===id);
+        if(id&&!exists){errors.push(`Line ${line}: pool chore id "${id}" not found — clear the id to create a new one.`);return;}
+        items.push({action:exists?"update":"create",kind,id:id||null,fields,title});
+      }
+    });
+    return{items,errors};
+  }
+  async function applyCsvImport(plan){
+    const upd={};const ts=Date.now();
+    plan.items.forEach((it,i)=>{
+      const base=it.kind==="assigned"?"wh/chores":"wh/pool";
+      if(it.action==="delete"){upd[`${base}/${it.id}`]=null;return;}
+      const id=it.id||`${it.kind==="assigned"?"c":"p"}${ts}_${i}`;
+      Object.entries(it.fields).forEach(([k,v])=>{
+        upd[`${base}/${id}/${k}`]=Array.isArray(v)&&v.length===0?null:v;
+      });
+      upd[`${base}/${id}/id`]=id;
+    });
+    await FB.atomic(upd);
+    toast(`Imported: ${plan.items.filter(i=>i.action==="create").length} new, ${plan.items.filter(i=>i.action==="update").length} updated, ${plan.items.filter(i=>i.action==="delete").length} removed ✓`,"success");
+    setCsvImport(null);
+  }
+
   async function saveCombo(data){
     const id=data.id||`cb${Date.now()}`;
     await FB.write(`wh/combos/${id}`,{...data,id});
@@ -1086,7 +1225,7 @@ export default function WattsHub(){
 
   /* ── Screen routing ── */
 
-  const A={fbCfg,setFbCfg,showCfg,setShowCfg,FB,ready,uid,online,kids,setKids,parents,setParents,chores,setChores,pool,setPool,comps,setComps,parentLog,setParentLog,storeItems,setStoreItems,txLog,setTxLog,bills,setBills,billPay,setBillPay,allowedUids,setAllowedUids,sumKids,setSumKids,sumSessions,setSumSessions,weeklyCheckins,setWeeklyCheckins,screen,setScreen,view,setView,activeKid,setActiveKid,activeParent,setActiveParent,parentMode,setParentMode,selDate,setSelDate,optim,setOptim,choreModal,setChoreModal,editCompModal,setEditCompModal,billModal,setBillModal,payBillModal,setPayBillModal,poolAddModal,setPoolAddModal,poolEditModal,setPoolEditModal,parentTaskModal,setParentTaskModal,checkinModal,setCheckinModal,showTimer,setShowTimer,bonusModal,setBonusModal,noteModal,setNoteModal,toasts,toast,kidById,parById,getComp,isToday,isScheduled,getOverride,pendCount,hasPIN,isAdmin,myClaimedPool,EARN_TYPES,weekEarned,monthEarned,remainingAssignedCents,parentContrib,billProgress,saveCfg,enterKid,enterParent,enterParentProfile,exitToPicker,goPin,completeChore,approveComp,rejectComp,editComp,claimPool,completePool,uncompletePool,logParentTask,saveChore,deleteChore,addPoolChore,removePoolChore,seedCleaningPool,updatePoolChore,payBill,triggerSummerBonus,completeSummerSession,backfillSessions,giveBonus,saveNote,awardXp,combos,comboModal,setComboModal,saveCombo,removeCombo,unclaimPool,settleModal,setSettleModal,settleBill};
+  const A={fbCfg,setFbCfg,showCfg,setShowCfg,FB,ready,uid,online,kids,setKids,parents,setParents,chores,setChores,pool,setPool,comps,setComps,parentLog,setParentLog,storeItems,setStoreItems,txLog,setTxLog,bills,setBills,billPay,setBillPay,allowedUids,setAllowedUids,sumKids,setSumKids,sumSessions,setSumSessions,weeklyCheckins,setWeeklyCheckins,screen,setScreen,view,setView,activeKid,setActiveKid,activeParent,setActiveParent,parentMode,setParentMode,selDate,setSelDate,optim,setOptim,choreModal,setChoreModal,editCompModal,setEditCompModal,billModal,setBillModal,payBillModal,setPayBillModal,poolAddModal,setPoolAddModal,poolEditModal,setPoolEditModal,parentTaskModal,setParentTaskModal,checkinModal,setCheckinModal,showTimer,setShowTimer,bonusModal,setBonusModal,noteModal,setNoteModal,toasts,toast,kidById,parById,getComp,isToday,isScheduled,getOverride,pendCount,hasPIN,isAdmin,myClaimedPool,EARN_TYPES,weekEarned,monthEarned,remainingAssignedCents,parentContrib,billProgress,saveCfg,enterKid,enterParent,enterParentProfile,exitToPicker,goPin,completeChore,approveComp,rejectComp,editComp,claimPool,completePool,uncompletePool,logParentTask,saveChore,deleteChore,addPoolChore,removePoolChore,seedCleaningPool,updatePoolChore,payBill,triggerSummerBonus,completeSummerSession,backfillSessions,giveBonus,saveNote,awardXp,combos,comboModal,setComboModal,saveCombo,removeCombo,unclaimPool,settleModal,setSettleModal,settleBill,csvImport,setCsvImport,exportChoresCsv,buildCsvImportPlan,applyCsvImport};
   return(<AppCtx.Provider value={A}><Shell/></AppCtx.Provider>);
 }
 
@@ -1854,8 +1993,35 @@ function WeeklyCheckinView(){
   );
 }
 function SettingsView(){
-  const{chores,hasPIN,parentMode,setParentMode,setScreen,setShowCfg,ready,online}=useA();
-  return(<div className="card">
+  const{chores,pool,hasPIN,parentMode,setParentMode,setScreen,setShowCfg,ready,online,exportChoresCsv,buildCsvImportPlan,setCsvImport,toast}=useA();
+  const fileRef=useRef(null);
+  function onImportFile(e){
+    const file=e.target.files?.[0];
+    e.target.value="";
+    if(!file)return;
+    const rd=new FileReader();
+    rd.onerror=()=>toast("Couldn't read that file","error");
+    rd.onload=()=>{
+      const plan=buildCsvImportPlan(String(rd.result||""));
+      if(!plan.items.length&&!plan.errors.length)plan.errors.push("No chore rows found.");
+      setCsvImport(plan);
+    };
+    rd.readAsText(file);
+  }
+  return(<div>
+  <div className="card" style={{marginBottom:12}}>
+    <div className="ch">📋 Chore spreadsheet</div>
+    <div style={{fontSize:12,color:"var(--tx2)",marginBottom:10,lineHeight:1.5}}>
+      Export every assigned + pool chore ({chores.length+pool.length} total) as a CSV, edit it in Excel or Google Sheets, then import it back.
+      Blank the <strong>id</strong> to add new chores; put <strong>yes</strong> in the delete column to remove one.
+    </div>
+    <div style={{display:"flex",gap:8}}>
+      <button className="btn bbl bsm" onClick={exportChoresCsv}>⬇️ Export CSV</button>
+      <button className="btn bg bsm" onClick={()=>fileRef.current?.click()}>⬆️ Import CSV</button>
+      <input ref={fileRef} type="file" accept=".csv,text/csv" style={{display:"none"}} onChange={onImportFile}/>
+    </div>
+  </div>
+  <div className="card">
     {[
       {l:"Firebase",s:ready?`🟢 Connected${!online?" · ⚠️ Offline":""}`:  "🔴 Demo mode",btn:"Configure",fn:()=>setShowCfg(true)},
       {l:"Parent PIN",s:hasPIN?"PIN is set":"No PIN set",btn:hasPIN?"Change":"Set PIN",fn:()=>setScreen("pin-set")},
@@ -1867,6 +2033,7 @@ function SettingsView(){
           :<button className="btn bg bsm" onClick={r.fn}>{r.btn}</button>}
       </div>
     ))}
+  </div>
   </div>);
 }
 function ChoreModalComp(){
@@ -2241,6 +2408,32 @@ function ComboModalC(){
     </div>
   </div></div>);
 }
+function ImportPreviewModalC(){
+  const{csvImport,setCsvImport,applyCsvImport}=useA();
+  const[busy,setBusy]=useState(false);
+  const m=csvImport;
+  if(!m)return null;
+  const creates=m.items.filter(i=>i.action==="create"),updates=m.items.filter(i=>i.action==="update"),dels=m.items.filter(i=>i.action==="delete");
+  return(<div className="overlay" onClick={()=>setCsvImport(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
+    <div className="modal-h">⬆️ Import preview</div>
+    <div className="card" style={{marginBottom:12,fontSize:13}}>
+      <div style={{padding:"3px 0"}}>🆕 <strong>{creates.length}</strong> new{creates.length>0&&<span style={{color:"var(--tx2)"}}> — {creates.slice(0,4).map(i=>i.title).join(", ")}{creates.length>4?"…":""}</span>}</div>
+      <div style={{padding:"3px 0"}}>✏️ <strong>{updates.length}</strong> updated{updates.length>0&&<span style={{color:"var(--tx2)"}}> — {updates.slice(0,4).map(i=>i.title).join(", ")}{updates.length>4?"…":""}</span>}</div>
+      <div style={{padding:"3px 0"}}>🗑 <strong>{dels.length}</strong> removed{dels.length>0&&<span style={{color:"var(--re)"}}> — {dels.map(i=>i.title).join(", ")}</span>}</div>
+    </div>
+    {m.errors.length>0&&(
+      <div className="card" style={{marginBottom:12,borderColor:"#FCA5A5"}}>
+        <div className="ch" style={{color:"var(--re)"}}>⚠️ {m.errors.length} row{m.errors.length>1?"s":""} skipped</div>
+        <div style={{fontSize:12,color:"var(--tx2)",maxHeight:140,overflowY:"auto",lineHeight:1.6}}>{m.errors.map((e,i)=><div key={i}>{e}</div>)}</div>
+      </div>
+    )}
+    <div className="fax">
+      <button className="btn bg" onClick={()=>setCsvImport(null)}>Cancel</button>
+      <button className="btn bp" disabled={busy||m.items.length===0} onClick={async()=>{setBusy(true);try{await applyCsvImport(m);}catch(e){setBusy(false);}}}>
+        Apply {m.items.length} change{m.items.length!==1?"s":""}</button>
+    </div>
+  </div></div>);
+}
 function SettleBillModalC(){
   const{settleModal,setSettleModal,kidById,billPay,settleBill}=useA();
   const m=settleModal;
@@ -2284,7 +2477,7 @@ function Toasts(){
   return(<div className="toasts">{toasts.map(t=><div key={t.id} className={`toast t-${t.type}`}>{t.msg}</div>)}</div>);
 }
 function Shell(){
-  const{activeKid,billModal,bills,bonusModal,choreModal,chores,comboModal,editCompModal,enterKid,enterParent,enterParentProfile,exitToPicker,giveBonus,goPin,isToday,kidById,kids,noteModal,online,parentMode,parentTaskModal,parents,payBillModal,pendCount,pool,poolAddModal,poolEditModal,ready,saveCfg,screen,selDate,setActiveKid,setBillModal,setBonusModal,setChoreModal,setNoteModal,setParentMode,setParentTaskModal,setPoolAddModal,setScreen,setSelDate,setShowCfg,setShowTimer,setView,settleModal,showCfg,showTimer,view}=useA();
+  const{activeKid,billModal,bills,bonusModal,choreModal,chores,comboModal,csvImport,editCompModal,enterKid,enterParent,enterParentProfile,exitToPicker,giveBonus,goPin,isToday,kidById,kids,noteModal,online,parentMode,parentTaskModal,parents,payBillModal,pendCount,pool,poolAddModal,poolEditModal,ready,saveCfg,screen,selDate,setActiveKid,setBillModal,setBonusModal,setChoreModal,setNoteModal,setParentMode,setParentTaskModal,setPoolAddModal,setScreen,setSelDate,setShowCfg,setShowTimer,setView,settleModal,showCfg,showTimer,view}=useA();
 if(screen==="picker")return(<>
   <style>{CSS}</style>
   {!online&&ready&&<div className="offline-bar">⚠️ Offline</div>}
@@ -2319,7 +2512,7 @@ if(screen==="pin-set")return(<><style>{CSS}</style><PINScreen mode="set" onSucce
 if(screen==="pin-verify")return(<><style>{CSS}</style><PINScreen mode="verify" onSuccess={enterParent} onBack={()=>setScreen("picker")}/></>);
 if(screen==="kid")return(<><style>{CSS}</style><ErrBound><KidModeApp/></ErrBound>
   {choreModal&&<ChoreModalComp/>}{editCompModal&&<EditCompModalComp/>}{parentTaskModal&&<ParentTaskModalComp/>}
-  {poolAddModal&&<PoolAddModalComp/>}{poolEditModal&&<PoolEditModalComp/>}{comboModal&&<ComboModalC/>}{settleModal&&<SettleBillModalC/>}{bonusModal&&<BonusModalC m={bonusModal} onClose={()=>setBonusModal(null)} onGive={giveBonus}/>}{noteModal&&<NoteModal/>}<Toasts/></>);
+  {poolAddModal&&<PoolAddModalComp/>}{poolEditModal&&<PoolEditModalComp/>}{comboModal&&<ComboModalC/>}{settleModal&&<SettleBillModalC/>}{csvImport&&<ImportPreviewModalC/>}{bonusModal&&<BonusModalC m={bonusModal} onClose={()=>setBonusModal(null)} onGive={giveBonus}/>}{noteModal&&<NoteModal/>}<Toasts/></>);
 
 /* Parent app */
 const NAV=[
@@ -2355,6 +2548,7 @@ return(<>
   {poolEditModal&&<PoolEditModalComp/>}
   {comboModal&&<ComboModalC/>}
   {settleModal&&<SettleBillModalC/>}
+  {csvImport&&<ImportPreviewModalC/>}
   {parentTaskModal&&<ParentTaskModalComp/>}
   {bonusModal&&<BonusModalC m={bonusModal} onClose={()=>setBonusModal(null)} onGive={giveBonus}/>}
   {noteModal&&<NoteModal/>}
