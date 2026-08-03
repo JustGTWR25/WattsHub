@@ -1,5 +1,4 @@
 import{useState,useEffect,useCallback,useMemo,useRef}from"react";
-import{SummerView,KidSummerCard,SummerNavBadge}from"./components/summer/SummerModule";
 
 /* ─── Firebase loader ─────────────────────────────────────────────────────── */
 let _db=null,_ref=null,_set=null,_update=null,_on=null,_off=null,_remove=null,_push=null,_auth=null,_anon=null,_authState=null;
