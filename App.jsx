@@ -1206,7 +1206,6 @@ export default function WattsHub(){
               </button>
             ))}
           </div>
-          </div>
           <div style={{padding:"0 9px"}}>
             <div className="nlbl">Kids</div>
             {kids.map(k=>{const cc=COLORS[k.colorIdx]||COLORS[0];return(
