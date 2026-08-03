@@ -891,6 +891,9 @@ export default function WattsHub(){
             ))
           )}
         </div>
+      </div>
+    );
+  }
 
   function MoneyView(){
     const buckets=[{key:"save",label:"Save",color:"var(--te)",pct:50},{key:"spend",label:"Spend",color:"var(--am)",pct:40},{key:"share",label:"Share",color:"var(--pk)",pct:10}];
