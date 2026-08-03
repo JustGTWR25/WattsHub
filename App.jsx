@@ -585,7 +585,7 @@ export default function WattsHub(){
 
   async function processPayout(kidId,amountCents){
     const kid=kidById(kidId);if(!kid)return;
-    if((kid.balanceCents||0)<amountCents){toast(`Not enough balance for ${kid.name}","warn");return;}
+    if((kid.balanceCents||0)<amountCents){toast(`Not enough balance for ${kid.name}`,"warn");return;}
     await fm(`wh/kids/${kidId}`,{balanceCents:(kid.balanceCents||0)-amountCents});
     const txId=`tx_${Date.now()}_${kidId}`;
     await fw(`wh/txlog/${txId}`,{id:txId,kidId,type:"payout",xp:0,cents:-amountCents,desc:"Monthly payout",ts:Date.now()});
