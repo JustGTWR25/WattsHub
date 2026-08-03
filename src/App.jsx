@@ -300,7 +300,7 @@ function PINScreen({mode,onSuccess,onBack}){
       <div className="pin-pad">
         {[1,2,3,4,5,6,7,8,9,"",0,"⌫"].map((d,i)=>(
           <button key={i} className="pin-btn" style={d===""?{visibility:"hidden"}:{}}
-            onClick={()=>d==="⌫"?()=>{setPin(p=>p.slice(0,-1));setErr("");}():append(String(d))}>{d}</button>
+            onClick={()=>{if(d==="⌫"){setPin(p=>p.slice(0,-1));setErr("");}else{append(String(d));}}}>{d}</button>
         ))}
       </div>
       {onBack&&<button className="btn btn-g btn-sm" style={{marginTop:4}} onClick={onBack}>← Back</button>}
