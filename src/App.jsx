@@ -730,7 +730,7 @@ export default function WattsHub(){
                   <div key={k.id} style={{borderBottom:"1px solid var(--b1)",paddingBottom:10,marginBottom:10}}>
                     <button onClick={()=>setExpandedKidApprovals(s=>({...s,[k.id]:!s[k.id]}))} style={{width:"100%",background:"none",border:"none",padding:"8px 0",display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer"}}>
                       <span style={{fontSize:13,fontWeight:700}}>{k.name} {pendingComps.length>0&&<span style={{background:"var(--am)",color:"#000",fontSize:10,fontWeight:800,padding:"2px 6px",borderRadius:4,marginLeft:8}}>●{pendingComps.length}</span>}</span>
-                      <span style={{fontSize:11,color:"var(--tx3)"}}>{"▼" if expandedKidApprovals[k.id] else "▶"}</span>
+                      <span style={{fontSize:11,color:"var(--tx3)"}}>{expandedKidApprovals[k.id]?"▼":"▶"}</span>
                     </button>
                     {expandedKidApprovals[k.id]&&(
                       <div style={{marginTop:8,paddingLeft:8,borderLeft:"2px solid var(--b2)"}}>
