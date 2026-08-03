@@ -406,6 +406,7 @@ export default function WattsHub(){
   const[summerMonthly,setSummerMonthly]=useState({});
   const[summerSessions,setSummerSessions]=useState({});
   const[homeworkStreaks,setHomeworkStreaks]=useState({});
+  const[poolChores,setPoolChores]=useState({});
 
   /* ── UI state ── */
   const[view,setView]=useState("dashboard");
@@ -441,6 +442,7 @@ export default function WattsHub(){
       listen("wh/reports/weekly",    v=>{setSummerWeekly(v||{});}),
       listen("wh/reports/monthly",   v=>{setSummerMonthly(v||{});}),
       listen("wh/homeworkStreaks",   v=>{setHomeworkStreaks(v||{});}),
+      listen("wh/pool",              v=>{setPoolChores(v||{});}),
     ];
     return()=>u.forEach(f=>f&&f());
   },[ready,listen]);
@@ -538,6 +540,16 @@ export default function WattsHub(){
     toast(`+${fmtDollars(totalRewardCents)} for ${kid.name}! Streak: ${newStreak} weeks${bonusRewardCents>0?" 🎉":""}!`,"success");
   }
 
+  async function claimPoolChore(choreId,kidId){
+    const chore=chores.find(c=>c.id===choreId);
+    const kid=kidById(kidId);
+    if(!chore||!kid)return;
+    const updatedAssignedTo=[...(chore.assignedTo||[]),kidId];
+    await fm(`wh/chores/${choreId}`,{assignedTo:updatedAssignedTo});
+    await fd(`wh/pool/${choreId}`);
+    toast(`${kid.name} claimed: ${chore.title}!`,"success");
+  }
+
   async function saveChore(data){
     const id=data.id||`c${Date.now()}`;
     await fw(`wh/chores/${id}`,{...data,id});
@@ -593,16 +605,90 @@ export default function WattsHub(){
   /* ── vmeta ── */
   const vmeta={
     dashboard:{t:"Dashboard",s:"Family overview"},
-    chores:{t:"Chores & Pool",s:choreTab==="assigned"?`${choreTimeFilter==="week"?"This week":"This month"}`:"Available to assign"},
+    chores:{t:"Chores & Pool",s:"My chores and available to grab"},
     store:{t:"Family Store",s:"Spend your coins"},
     money:{t:"Money",s:activeKid?`${kidById(activeKid)?.name}'s balance`:"All balances"},
-    activity:{t:"Activity",s:"Completed tasks"},
-    devices:{t:"Devices",s:"Manage access"},
+    summary:{t:"Summary",s:"Weekly homework tracking"},
     settings:{t:"Settings",s:"Family & app preferences"},
   };
   const vm=vmeta[view]||{t:view,s:""};
 
   /* ════════════════════════════════ VIEWS ════════════════════════════════ */
+
+  function SummaryView(){
+    return(
+      <div>
+        <div className="card">
+          <div className="ch">📚 Weekly Homework Summary</div>
+          <div style={{marginBottom:16}}>
+            {kids.map(k=>{
+              const hwData=homeworkStreaks[k.id];
+              const wk=getCurrentWeekKey();
+              const isCompleted=hwData?.history?.[wk];
+              const streak=hwData?.currentStreak||0;
+              const cc=COLORS[k.colorIdx]||COLORS[0];
+              return(
+                <div key={k.id} style={{display:"flex",alignItems:"center",gap:12,padding:"12px",background:"var(--s3)",borderRadius:8,marginBottom:10}}>
+                  <div style={{width:36,height:36,borderRadius:"50%",background:cc.bg,color:cc.tx,fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,flexShrink:0}}>{k.initials}</div>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:13,fontWeight:700}}>{k.name}</div>
+                    <div style={{fontSize:11,color:"var(--tx3)",marginTop:2}}>
+                      {isCompleted?"✓ Completed this week":"Not yet completed"}
+                      {streak>0&&<span style={{marginLeft:8,fontWeight:700}}>{streak>=4?"🔥":"⚡"} {streak} week streak</span>}
+                    </div>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontSize:13,fontWeight:700,color:"var(--am)"}}>{fmtDollars((streak+1)*100)}</div>
+                    <div style={{fontSize:10,color:"var(--tx3)"}}>{streak>0&&streak%4===0?"w/ bonus ":""}this week</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="card" style={{marginTop:14}}>
+          <div className="ch">✓ Homework Progress</div>
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            {kids.map(k=>{
+              const hwData=homeworkStreaks[k.id];
+              const streak=hwData?.currentStreak||0;
+              const nextBonus=Math.ceil((streak+1)/4)*4;
+              const progressToBonus=nextBonus-(streak+1)+1;
+              return(
+                <div key={k.id}>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:6}}>
+                    <span style={{fontWeight:700}}>{k.name}</span>
+                    <span style={{color:"var(--tx3)"}}>{streak}/{nextBonus} weeks to bonus</span>
+                  </div>
+                  <div style={{background:"var(--s4)",borderRadius:4,height:8,overflow:"hidden"}}>
+                    <div style={{width:`${(streak/nextBonus)*100}%`,height:"100%",background:"var(--te)",borderRadius:4,transition:"width .4s"}}/>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="card" style={{marginTop:14}}>
+          <div className="ch">💰 Weekly Homework Rewards</div>
+          <div className="alog">
+            {txLog.filter(tx=>tx.type==="homework").slice(0,20).map(tx=>{
+              const k=kidById(tx.kidId);
+              return(
+                <div key={tx.id} className="alog-row">
+                  <div className="alog-time">{new Date(tx.ts).toLocaleDateString("en-US",{month:"short",day:"numeric"})}</div>
+                  <div className="alog-msg"><strong>{k?.name||"?"}</strong> – {tx.desc}</div>
+                  <div style={{fontSize:11,fontWeight:800,color:"var(--te)"}}>{fmtDollars(Math.abs(tx.cents))}</div>
+                </div>
+              );
+            })}
+            {txLog.filter(tx=>tx.type==="homework").length===0&&<div style={{color:"var(--tx3)",fontSize:13,padding:"12px 0"}}>No homework rewards yet.</div>}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   function DashboardView(){
     const weekKey=getCurrentWeekKey();
@@ -740,167 +826,71 @@ export default function WattsHub(){
   }
 
   function CombinedChoresView(){
-    const filtered=chores.filter(c=>(!activeKid||c.assignedTo?.includes(activeKid))&&isScheduled(c,selDate));
-    const dateLabel=selDate===today()?"Today":parseDate(selDate).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"});
     const isKidMode=screen==="kid";
     const kid=activeKid?kidById(activeKid):null;
-    const balance=kid?(kid.balanceCents||0):null;
-    const defaultItems=[
-      {id:"si_d1",name:"30 min screen time",emoji:"📱",priceCents:50},
-      {id:"si_d2",name:"Pick dinner",emoji:"🍕",priceCents:100},
-      {id:"si_d3",name:"Stay up 30 min",emoji:"🌙",priceCents:80},
-      {id:"si_d4",name:"Skip one chore",emoji:"🎯",priceCents:150},
-      {id:"si_d5",name:"Movie night pick",emoji:"🎬",priceCents:120},
-      {id:"si_d6",name:"Cash out $1",emoji:"💵",priceCents:100},
-    ];
-    const items=[...defaultItems,...storeItems];
-    const completions=getCompletionsInPeriod(choreTimeFilter);
-    const historyComps=Object.entries(completions).flatMap(([dk,items])=>
-      Object.entries(items||{}).map(([ck,v])=>({dk,ck,v}))
-    );
+    const myChores=chores.filter(c=>!activeKid||c.assignedTo?.includes(activeKid));
+    const availablePoolChores=Object.values(poolChores||{}).filter(Boolean);
 
     return(
       <div>
-        {choreTab==="assigned"?(
-          <>
-            <div style={{display:"flex",gap:8,marginBottom:14,borderBottom:"1px solid var(--b1)",paddingBottom:10}}>
-              {!activeKid&&(
-                <>
-                  <button className={`btn btn-sm ${choreTimeFilter==="week"?"btn-p":"btn-g"}`} onClick={()=>setChoreTimeFilter("week")}>This Week</button>
-                  <button className={`btn btn-sm ${choreTimeFilter==="month"?"btn-p":"btn-g"}`} onClick={()=>setChoreTimeFilter("month")}>This Month</button>
-                </>
-              )}
-              {activeKid&&(
-                <>
-                  <button className="btn btn-g btn-sm" onClick={()=>{const d=new Date(selDate);d.setDate(d.getDate()-1);setSelDate(d.toISOString().split("T")[0]);}}>‹</button>
-                  <span style={{flex:1,textAlign:"center",fontSize:13,fontWeight:700,paddingTop:4}}>{dateLabel}</span>
-                  <button className="btn btn-g btn-sm" disabled={selDate===today()} onClick={()=>{const d=new Date(selDate);d.setDate(d.getDate()+1);const s=d.toISOString().split("T")[0];if(s<=today())setSelDate(s);}}>›</button>
-                </>
-              )}
+        {/* My Chores Section */}
+        <div style={{marginBottom:24}}>
+          <div className="ch">✓ My Chores</div>
+          {myChores.length===0?(
+            <div style={{textAlign:"center",padding:"20px 0",color:"var(--tx3)",fontSize:13}}>
+              {activeKid?"No chores assigned yet":"Select a kid to see their chores"}
             </div>
-            {parentMode&&pendCount>0&&(
-              <div className="card" style={{marginBottom:12}}>
-                <div className="ch">Pending Approval</div>
-                {chores.filter(c=>c.requiresApproval).flatMap(c=>
-                  kids.map(k=>{
-                    const comp=getComp(selDate,c.id,k.id);
-                    if(comp?.status!=="pending")return null;
-                    return(
-                      <div key={k.id+c.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:"1px solid var(--b1)"}}>
-                        <span style={{flex:1,fontSize:13}}><strong>{k.name}</strong> – {c.title}</span>
-                        <button className="btn btn-te btn-sm" onClick={()=>approveComp(selDate,c.id,k.id)}>✓ Approve</button>
-                        <button className="btn btn-co btn-sm" onClick={()=>fd(`wh/comps/${selDate}/${ckey(c.id,k.id)}`)}>✗</button>
-                      </div>
-                    );
-                  }).filter(Boolean)
-                )}
-              </div>
-            )}
-            {activeKid?(
-              <>
-                {filtered.length===0?(
-                  <div style={{textAlign:"center",padding:"40px 0",color:"var(--tx3)"}}>
-                    {parentMode?"No chores scheduled — add one with + Chore":"No chores today! 🎉"}
+          ):(
+            myChores.map(c=>{
+              const comp=getComp(today(),c.id,activeKid||"");
+              const status=comp?.status||"none";
+              const cc=COLORS[kid?.colorIdx||0];
+              const canTap=isKidMode||!parentMode;
+              return(
+                <div key={c.id} className={`ccard${status==="done"||status==="approved"?" done":status==="pending"?" pending":""}`}
+                  onClick={()=>canTap&&activeKid&&completeChore(c.id,activeKid)}>
+                  <div className={`ccheck${status==="done"||status==="approved"?" done":status==="pending"?" pending":""}`}>
+                    {(status==="done"||status==="approved")&&<span style={{fontSize:12,color:"#000"}}>✓</span>}
+                    {status==="pending"&&<span style={{fontSize:10}}>⏳</span>}
                   </div>
-                ):(
-                  filtered.map(c=>{
-                    const kidsForChore=[kidById(activeKid)];
-                    return kidsForChore.map(k=>{
-                      if(!k)return null;
-                      const comp=getComp(selDate,c.id,k.id);
-                      const status=comp?.status||"none";
-                      const cc=COLORS[k.colorIdx]||COLORS[0];
-                      const canTap=isKidMode||!parentMode;
-                      return(
-                        <div key={c.id+k.id} className={`ccard${status==="done"||status==="approved"?" done":status==="pending"?" pending":""}`}
-                          onClick={()=>canTap&&completeChore(c.id,k.id)}>
-                          <div className={`ccheck${status==="done"||status==="approved"?" done":status==="pending"?" pending":""}`}>
-                            {(status==="done"||status==="approved")&&<span style={{fontSize:12,color:"#000"}}>✓</span>}
-                            {status==="pending"&&<span style={{fontSize:10}}>⏳</span>}
-                          </div>
-                          <div style={{flex:1}}>
-                            <div className="ctitle">{c.title}</div>
-                          </div>
-                          <span className={`cdiff diff-${c.diff||"easy"}`}>{c.diff||"easy"}</span>
-                          <span className="cxp">+{c.xp||10} XP</span>
-                          {parentMode&&(
-                            <div style={{display:"flex",gap:4}} onClick={e=>e.stopPropagation()}>
-                              <button className="btn btn-g btn-sm" onClick={()=>{setEditChore({...c});setShowAddChore(true);}}>✏️</button>
-                              <button className="btn btn-co btn-sm" onClick={()=>{if(window.confirm("Delete this chore?"))deleteChore(c.id);}}>🗑</button>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    });
-                  })
-                )}
-              </>
-            ):(
-              <>
-                {historyComps.length===0?(
-                  <div style={{textAlign:"center",padding:"40px 0",color:"var(--tx3)"}}>No completions {choreTimeFilter==="week"?"this week":"this month"}</div>
-                ):(
-                  Object.entries(Object.groupBy?Object.groupBy(historyComps,c=>c.dk):historyComps.reduce((a,c)=>{a[c.dk]||(a[c.dk]=[]);a[c.dk].push(c);return a},{})).reverse().map(([dk,comps])=>(
-                    <div key={dk} style={{marginBottom:14}}>
-                      <div style={{fontSize:11,fontWeight:700,color:"var(--tx3)",padding:"8px 0",textTransform:"uppercase"}}>{parseDate(dk).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"})}</div>
-                      {comps.map(c=>{
-                        const chore=chores.find(ch=>ch.id===c.ck.split("_")[0]);
-                        const kidId=c.ck.split("_")[1];
-                        const kid=kidById(kidId);
-                        const cc=COLORS[kid?.colorIdx||0];
-                        return(
-                          <div key={`${c.dk}_${c.ck}`} className={`ccard${c.v?.status==="done"||c.v?.status==="approved"?" done":c.v?.status==="pending"?" pending":""}`} style={{marginBottom:8}}>
-                            <div className={`ccheck${c.v?.status==="done"||c.v?.status==="approved"?" done":c.v?.status==="pending"?" pending":""}`}>
-                              {(c.v?.status==="done"||c.v?.status==="approved")&&<span style={{fontSize:12,color:"#000"}}>✓</span>}
-                              {c.v?.status==="pending"&&<span style={{fontSize:10}}>⏳</span>}
-                            </div>
-                            <div style={{flex:1}}>
-                              <div className="ctitle">{chore?.title}</div>
-                              <div style={{fontSize:11,color:cc.tx,marginTop:1}}>{kid?.name}</div>
-                            </div>
-                            <span className={`cdiff diff-${chore?.diff||"easy"}`}>{chore?.diff||"easy"}</span>
-                            <span className="cxp">+{c.v?.xp||10} XP</span>
-                          </div>
-                        );
-                      })}
+                  <div style={{flex:1}}>
+                    <div className="ctitle">{c.title}</div>
+                  </div>
+                  <span className={`cdiff diff-${c.diff||"easy"}`}>{c.diff||"easy"}</span>
+                  <span className="cxp">+{c.xp||10} XP</span>
+                  {parentMode&&activeKid&&(
+                    <div style={{display:"flex",gap:4}} onClick={e=>e.stopPropagation()}>
+                      <button className="btn btn-g btn-sm" onClick={()=>{setEditChore({...c});setShowAddChore(true);}}>✏️</button>
+                      <button className="btn btn-co btn-sm" onClick={()=>{if(window.confirm("Delete this chore?"))deleteChore(c.id);}}>🗑</button>
                     </div>
-                  ))
-                )}
-              </>
-            )}
-          </>
-        ):(
-          <>
-            {parentMode?(
-              <div>
-                <div style={{fontSize:12,color:"var(--tx3)",marginBottom:12}}>Unassigned chores available to assign to kids.</div>
-                {chores.filter(c=>!c.assignedTo||c.assignedTo.length===0).length===0?(
-                  <div style={{textAlign:"center",padding:"40px 0",color:"var(--tx3)"}}>All chores are assigned! Add a new chore to expand the pool.</div>
-                ):(
-                  chores.filter(c=>!c.assignedTo||c.assignedTo.length===0).map(c=>(
-                    <div key={c.id} className="ccard" onClick={()=>{setEditChore({...c});setShowAddChore(true);}}>
-                      <div style={{flex:1}}>
-                        <div className="ctitle">{c.title}</div>
-                        <div style={{fontSize:11,color:"var(--tx3)",marginTop:2}}>Unassigned</div>
-                      </div>
-                      <span className={`cdiff diff-${c.diff||"easy"}`}>{c.diff||"easy"}</span>
-                      <span className="cxp">+{c.xp||10} XP</span>
-                      <div style={{display:"flex",gap:4}} onClick={e=>e.stopPropagation()}>
-                        <button className="btn btn-p btn-sm" onClick={()=>{setEditChore({...c});setShowAddChore(true);}}>Assign</button>
-                        <button className="btn btn-co btn-sm" onClick={()=>{if(window.confirm("Delete this chore?"))deleteChore(c.id);}}>Delete</button>
-                      </div>
-                    </div>
-                  ))
-                )}
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Available to Grab Section */}
+        <div>
+          <div className="ch">🎯 Available to Grab</div>
+          {availablePoolChores.length===0?(
+            <div style={{textAlign:"center",padding:"20px 0",color:"var(--tx3)",fontSize:13}}>
+              No chores available right now
+            </div>
+          ):(
+            availablePoolChores.map(c=>(
+              <div key={c.id} className="ccard" onClick={()=>activeKid&&claimPoolChore(c.id,activeKid)} style={{cursor:activeKid?"pointer":"not-allowed",opacity:activeKid?1:0.6}}>
+                <div style={{flex:1}}>
+                  <div className="ctitle">{c.title}</div>
+                  <div style={{fontSize:11,color:"var(--tx3)",marginTop:2}}>Available for anyone</div>
+                </div>
+                <span className={`cdiff diff-${c.diff||"easy"}`}>{c.diff||"easy"}</span>
+                <span className="cxp">+{c.xp||10} XP</span>
+                {activeKid&&<button className="btn btn-te btn-sm" onClick={(e)=>{e.stopPropagation();claimPoolChore(c.id,activeKid);}}>Claim</button>}
               </div>
-            ):(
-              <div style={{textAlign:"center",padding:"40px 0",color:"var(--tx3)"}}>Chore pool is for parents only.</div>
-            )}
-          </>
-        )}
-      </div>
-    );
-  }
+            ))
+          )}
+        </div>
 
   function MoneyView(){
     const buckets=[{key:"save",label:"Save",color:"var(--te)",pct:50},{key:"spend",label:"Spend",color:"var(--am)",pct:40},{key:"share",label:"Share",color:"var(--pk)",pct:10}];
@@ -1156,14 +1146,11 @@ export default function WattsHub(){
           <button className="km-back" onClick={exitToPicker}>← Home</button>
         </div>
         <div className="km-tabs">
-          {[{id:"chores",lbl:"Chores"},{id:"store",lbl:"Store"},{id:"money",lbl:"Money"}].map(t=>(
+          {[{id:"chores",lbl:"Chores & Pool"},{id:"store",lbl:"Store"},{id:"money",lbl:"Money"}].map(t=>(
             <button key={t.id} className={`km-tab${kmTab===t.id?" act":""}`} onClick={()=>setKmTab(t.id)}>{t.lbl}</button>
           ))}
         </div>
         <div className="km-content">
-          {kmTab==="chores"&&<div style={{display:"flex",gap:8,marginBottom:14,borderBottom:"1px solid var(--b1)",paddingBottom:10}}>
-            <button className={`btn btn-sm ${choreTab==="assigned"?"btn-p":"btn-g"}`} onClick={()=>setChoreTab("assigned")}>My Chores</button>
-          </div>}
           {kmTab==="chores"&&<CombinedChoresView/>}
           {kmTab==="store"&&<StoreView/>}
           {kmTab==="money"&&<MoneyView/>}
@@ -1184,11 +1171,10 @@ export default function WattsHub(){
     {id:"chores",ic:"✓",lbl:"Chores & Pool"},
     {id:"store",ic:"🛍️",lbl:"Store"},
     {id:"money",ic:"💵",lbl:"Money"},
-    {id:"activity",ic:"↻",lbl:"Activity"},
-    {id:"devices",ic:"⊞",lbl:"Devices"},
+    {id:"summary",ic:"📊",lbl:"Summary"},
     {id:"settings",ic:"⚙",lbl:"Settings"},
   ];
-  const bnav=[{id:"dashboard",ic:"⬡",lbl:"Home"},{id:"chores",ic:"✓",lbl:"Chores"},{id:"store",ic:"🛍️",lbl:"Store"},{id:"activity",ic:"↻",lbl:"Log"}];
+  const bnav=[{id:"dashboard",ic:"⬡",lbl:"Home"},{id:"chores",ic:"✓",lbl:"Chores"},{id:"store",ic:"🛍️",lbl:"Store"},{id:"summary",ic:"📊",lbl:"Summary"}];
 
   return(
     <>
@@ -1216,6 +1202,7 @@ export default function WattsHub(){
                 {n.id==="chores"&&pendCount>0&&<span className="nav-badge">{pendCount}</span>}
               </button>
             ))}
+          </div>
           </div>
           <div style={{padding:"0 9px"}}>
             <div className="nlbl">Kids</div>
@@ -1245,27 +1232,17 @@ export default function WattsHub(){
             <div className="tb-r">
               {pendCount>0&&parentMode&&<span style={{background:"rgba(245,166,35,0.13)",color:"var(--am)",fontSize:11,fontWeight:800,padding:"3px 8px",borderRadius:5}}>{pendCount} pending</span>}
               {ready&&<span style={{background:"rgba(45,212,167,0.09)",color:"var(--te)",fontSize:11,fontWeight:800,padding:"3px 8px",borderRadius:5}}>● Live</span>}
-              {parentMode&&<button className="btn btn-g btn-sm" onClick={()=>setShowFocusTimer(true)}>⏱</button>}
               {parentMode&&view==="dashboard"&&<button className="btn btn-g btn-sm" onClick={()=>setShowPayoutModal(true)}>💰 Payout</button>}
-              {parentMode&&view==="store"&&<button className="btn btn-g btn-sm" onClick={()=>setShowAddItem(true)}>+ Item</button>}
-              {parentMode&&view==="chores"&&choreTab==="pool"&&<button className="btn btn-p btn-sm" onClick={()=>{setEditChore(null);setShowAddChore(true);}}>+ Chore</button>}
-              {parentMode&&<button className="btn btn-g btn-sm" onClick={()=>setShowAddKid(true)}>+ Kid</button>}
+              {parentMode&&view==="store"&&<button className="btn btn-g btn-sm" onClick={()=>setShowAddItem(true)}>+ Reward</button>}
+              {parentMode&&view==="chores"&&<button className="btn btn-p btn-sm" onClick={()=>{setEditChore(null);setShowAddChore(true);}}>+ Chore</button>}
             </div>
           </div>
           <div className="content">
             {view==="dashboard"&&<DashboardView/>}
-            {view==="chores"&&<div>
-              <div style={{display:"flex",gap:8,marginBottom:14,borderBottom:"1px solid var(--b1)",paddingBottom:10}}>
-                <button className={`btn btn-sm ${choreTab==="assigned"?"btn-p":"btn-g"}`} onClick={()=>setChoreTab("assigned")}>Assigned Chores</button>
-                <button className={`btn btn-sm ${choreTab==="pool"?"btn-p":"btn-g"}`} onClick={()=>setChoreTab("pool")}>Chore Pool</button>
-                {!activeKid&&parentMode&&choreTab==="pool"&&<button className="btn btn-g btn-sm" style={{marginLeft:"auto"}} onClick={()=>{setEditChore(null);setShowAddChore(true);}}>+ New Chore</button>}
-              </div>
-              <CombinedChoresView/>
-            </div>}
+            {view==="chores"&&<CombinedChoresView/>}
             {view==="store"&&<StoreView/>}
             {view==="money"&&<MoneyView/>}
-            {view==="activity"&&<ActivityView/>}
-            {view==="devices"&&<DevicesView/>}
+            {view==="summary"&&<SummaryView/>}
             {view==="settings"&&<SettingsView/>}
           </div>
         </main>
